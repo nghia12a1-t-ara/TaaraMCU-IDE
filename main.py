@@ -115,7 +115,7 @@ class CodeEditor(QsciScintilla):
             with open(theme_path, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error loading theme: {e}")
+            # print(f"Error loading theme: {e}")
             return None
 
     def apply_theme(self):
@@ -849,10 +849,9 @@ class MainWindow(QMainWindow):
 
     def new_file(self):
         """Create a new empty file"""
-        editor = CodeEditor()
-        editor.setModified(False)
-        index = self.tabWidget.addTab(editor, "Untitled")
-        self.tabWidget.setCurrentIndex(index)
+        editor = CodeEditor(self)  # Ensure self is passed as the parent
+        self.tabWidget.addTab(editor, "Untitled")
+        self.tabWidget.setCurrentWidget(editor)  # Set the new editor as the current widget
 
     def open_file(self, file_path=None, cursor_pos=(0, 0)):
         """Open a file in a new tab"""
@@ -891,43 +890,51 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
 
-    def save_file(self, editor=None):
+    def save_file(self):
         """Save the current file"""
-        if editor is None:
-            editor = self.get_current_editor()
-        if not editor:
-            return False
-        
-        if not hasattr(editor, 'file_path') or not editor.file_path:
-            file_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save File",
-                "",
-                "All Files (*.*)"
-            )
-            if not file_path:
-                return False
-            editor.file_path = file_path
-        
+        current_editor = self.get_current_editor()
+        if current_editor is None:
+            return
+
+        if not hasattr(current_editor, 'file_path'):
+            file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "All Files (*.*)")
+            if file_path:
+                current_editor.file_path = file_path
+            else:
+                return
         try:
-            with open(editor.file_path, 'w', encoding='utf-8') as f:
-                f.write(editor.text())
-            editor.setModified(False)
+            with open(current_editor.file_path, 'w', encoding='utf-8') as f:
+                f.write(current_editor.text())
+                # print(f"File saved: {current_editor.file_path}")  # Debugging line
+            
+            # Mark the editor as not modified
+            current_editor.setModified(False)
+            
+            # Update the tab title to remove the asterisk
+            current_tab_index = self.tabWidget.indexOf(current_editor)
+            if current_tab_index != -1:
+                tab_text = self.tabWidget.tabText(current_tab_index)
+                if tab_text.endswith('*'):
+                    self.tabWidget.setTabText(current_tab_index, tab_text[:-1])  # Remove the asterisk
+            
+            # Update the tab title to the file name
             self.tabWidget.setTabText(
-                self.tabWidget.indexOf(editor), 
-                Path(editor.file_path).name
+                current_tab_index, 
+                Path(current_editor.file_path).name
             )
+            # print(f"Content to save: {current_editor.text()}")  # Debugging line
+            
             return True
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save file: {str(e)}")
             return False
 
     def get_current_editor(self):
+        """Return the currently active editor"""
         current_index = self.tabWidget.currentIndex()
-        if current_index == -1:
-            return None
-        editor = self.tabWidget.widget(current_index)
-        return editor
+        if current_index != -1:
+            return self.tabWidget.widget(current_index)
+        return None
 
     def close_tab(self, index):
         """Handle closing a tab"""
