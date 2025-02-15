@@ -1,5 +1,25 @@
 {
-    "open_files": [],
-    "unsaved_files": [],
-    "current_tab": 0
+    "open_files": [
+        {
+            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/main.py",
+            "cursor": [
+                0,
+                0
+            ]
+        }
+    ],
+    "unsaved_files": [
+        {
+            "backup_path": "c:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\backups\\unsaved_20250215_074428_0.txt",
+            "content": "\u00e0dafsdfa",
+            "cursor": [
+                0,
+                8
+            ],
+            "original_path": null,
+            "tab_name": "Untitled",
+            "timestamp": "20250215_074428"
+        }
+    ],
+    "current_tab": 1
 }
