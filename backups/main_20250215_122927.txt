@@ -78,6 +78,9 @@ class CodeEditor(QsciScintilla):
         self.setAutoIndent(True)
         self.setBackspaceUnindents(True)
 
+        # Connect the textChanged signal to update the tab title
+        self.textChanged.connect(self.on_text_changed)
+
     def maintain_margin_font(self):
         """Keep margin font size fixed regardless of zoom level"""
         self.setMarginsFont(self.margin_font)
@@ -182,6 +185,31 @@ class CodeEditor(QsciScintilla):
         for style in range(128):
             if not self.lexer.paper(style).isValid():
                 self.lexer.setPaper(QColor(editor_bg), style)
+
+    def on_text_changed(self):
+        """Update the tab title to indicate unsaved changes"""
+        parent = self.parent()  # Get the parent
+        while parent and not hasattr(parent, 'tabWidget'):
+            parent = parent.parent()  # Navigate up to find the MainWindow
+
+        if parent and hasattr(parent, 'tabWidget'):  # Check if parent has tabWidget
+            current_tab_index = parent.tabWidget.indexOf(self)
+            if current_tab_index != -1:
+                tab_text = parent.tabWidget.tabText(current_tab_index)
+                if not tab_text.endswith('*'):
+                    parent.tabWidget.setTabText(current_tab_index, tab_text + '*')
+
+    def setText(self, text):
+        """Override setText to reset the unsaved changes marker"""
+        super().setText(text)
+        # Reset the unsaved changes marker when setting text
+        parent = self.parent()
+        if parent and hasattr(parent, 'tabWidget'):
+            current_tab_index = parent.tabWidget.indexOf(self)
+            if current_tab_index != -1:
+                tab_text = parent.tabWidget.tabText(current_tab_index)
+                if tab_text.endswith('*'):
+                    parent.tabWidget.setTabText(current_tab_index, tab_text[:-1])  # Remove the asterisk
 
 # Add this class for the Find Dialog
 class FindDialog(QDialog):
@@ -670,6 +698,9 @@ class MainWindow(QMainWindow):
         self.tabWidget.tabCloseRequested.connect(self.close_tab)
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
         
+        # Install event filter for middle mouse click
+        self.tabWidget.tabBar().installEventFilter(self)
+        
         # Install event filter for right mouse click on tabs
         self.tabWidget.tabBar().installEventFilter(self)
         
@@ -849,8 +880,7 @@ class MainWindow(QMainWindow):
 
     def new_file(self):
         """Create a new empty file"""
-        editor = CodeEditor()
-        editor.setModified(False)
+        editor = CodeEditor(self)  # Ensure self is passed as the parent
         index = self.tabWidget.addTab(editor, "Untitled")
         self.tabWidget.setCurrentIndex(index)
 
@@ -876,7 +906,7 @@ class MainWindow(QMainWindow):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
                 
-                editor = CodeEditor()
+                editor = CodeEditor(self)  # Ensure self is passed as the parent
                 editor.setText(text)
                 editor.file_path = file_path
                 editor.setModified(False)
@@ -912,11 +942,23 @@ class MainWindow(QMainWindow):
         try:
             with open(editor.file_path, 'w', encoding='utf-8') as f:
                 f.write(editor.text())
+            
+            # Mark the editor as not modified
             editor.setModified(False)
+            
+            # Update the tab title to remove the asterisk
+            current_tab_index = self.tabWidget.indexOf(editor)
+            if current_tab_index != -1:
+                tab_text = self.tabWidget.tabText(current_tab_index)
+                if tab_text.endswith('*'):
+                    self.tabWidget.setTabText(current_tab_index, tab_text[:-1])  # Remove the asterisk
+            
+            # Update the tab title to the file name
             self.tabWidget.setTabText(
-                self.tabWidget.indexOf(editor), 
+                current_tab_index, 
                 Path(editor.file_path).name
             )
+            
             return True
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save file: {str(e)}")
@@ -1001,7 +1043,7 @@ class MainWindow(QMainWindow):
                     
                     # Restore unsaved files
                     for unsaved in unsaved_files:
-                        editor = CodeEditor()
+                        editor = CodeEditor(self)  # Ensure self is passed as the parent
                         editor.setText(unsaved['content'])
                         editor.setCursorPosition(*tuple(unsaved['cursor']))
                         editor.setModified(True)
@@ -1080,6 +1122,12 @@ class MainWindow(QMainWindow):
                             'tab_name': self.tabWidget.tabText(i),
                             'timestamp': timestamp
                         })
+                    else:
+                        # Delete the temporary file if it exists
+                        if hasattr(editor, 'file_path') and editor.file_path is None:
+                            backup_path = str(self.backup_dir / f"unsaved_{i}.txt")
+                            if Path(backup_path).exists():
+                                Path(backup_path).unlink()  # Delete the temporary file
             
             # Save session data
             with open(self.session_file, 'w', encoding='utf-8') as f:
@@ -1092,6 +1140,16 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def eventFilter(self, obj, event):
+        """Handle middle mouse click on tabs"""
+        if obj is self.tabWidget.tabBar():
+            if event.type() == event.Type.MouseButtonRelease:
+                if event.button() == Qt.MouseButton.MiddleButton:
+                    # Get the tab index at the mouse position
+                    tab_index = obj.tabAt(event.pos())
+                    if tab_index != -1:  # Valid tab clicked
+                        self.close_tab(tab_index)
+                        return True
+        
         """Handle right mouse click on tabs"""
         if obj is self.tabWidget.tabBar():
             if event.type() == event.Type.MouseButtonRelease:
@@ -1101,21 +1159,8 @@ class MainWindow(QMainWindow):
                         # Use mapToGlobal to get the global position
                         self.show_tab_context_menu(tab_index, obj.mapToGlobal(event.pos()))
                         return True
+        
         return super().eventFilter(obj, event)
-
-    def copy_full_file_path(self, editor):
-        """Copy the full file path to the clipboard"""
-        if hasattr(editor, 'file_path') and editor.file_path:
-            clipboard = QApplication.clipboard()
-            clipboard.setText(editor.file_path)
-
-    def open_containing_folder(self, editor):
-        """Open the containing folder of the file in Explorer"""
-        if hasattr(editor, 'file_path') and editor.file_path:
-            folder_path = Path(editor.file_path).parent
-            if folder_path.exists():
-                import subprocess
-                subprocess.Popen(f'explorer "{folder_path}"')
 
     def show_tab_context_menu(self, tab_index, pos):
         """Show context menu for tab actions"""
@@ -1141,6 +1186,20 @@ class MainWindow(QMainWindow):
         
         # Show the context menu
         menu.exec(pos)
+
+    def copy_full_file_path(self, editor):
+        """Copy the full file path to the clipboard"""
+        if hasattr(editor, 'file_path') and editor.file_path:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(editor.file_path)
+
+    def open_containing_folder(self, editor):
+        """Open the containing folder of the file in Explorer"""
+        if hasattr(editor, 'file_path') and editor.file_path:
+            folder_path = Path(editor.file_path).parent
+            if folder_path.exists():
+                import subprocess
+                subprocess.Popen(f'explorer "{folder_path}"')
 
 def main():
     app = QApplication(sys.argv)
