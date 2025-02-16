@@ -1,3 +1,5 @@
+Build own IDE (focus on Text Editor and Debugger) for Microcontrollers. This tools based on the Python QsciScintilla Library
+
 taara_debugger/
 │
 ├── src/

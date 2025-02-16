@@ -813,9 +813,15 @@ class MainWindow(QMainWindow):
 
         # Add action for reopening the last closed file
         self.reopenAction = QAction("Reopen Last Closed File", self)
-        self.reopenAction.setShortcut("Ctrl+T")
+        self.reopenAction.setShortcut("Ctrl+G")
         self.reopenAction.triggered.connect(self.reopen_last_closed_file)
         self.addAction(self.reopenAction)   # Make the shortcut work globally
+        
+        # Add action for closing the current tab
+        self.closeTabAction = QAction("Close Tab", self)
+        self.closeTabAction.setShortcut("Ctrl+F4")
+        self.closeTabAction.triggered.connect(self.close_current_tab)
+        self.addAction(self.closeTabAction)  # Make the shortcut work globally
 
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
@@ -1295,6 +1301,12 @@ class MainWindow(QMainWindow):
                 editor.setModified(False)   # Mark as saved
                 self.set_tab_background_color(self.tabWidget.indexOf(editor), "saved")
 
+    def close_current_tab(self):
+        """Close the currently active tab."""
+        current_index = self.tabWidget.currentIndex()
+        if current_index != -1:
+            self.close_file(current_index)  # Call the existing close_file method
+            
 def main():
     app = QApplication(sys.argv)
     window = MainWindow()
