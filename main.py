@@ -41,7 +41,7 @@ class CodeEditor(QsciScintilla):
         self.lexer.setDefaultFont(self.text_font)
         
         # Load and apply theme
-        self.theme = self.load_theme()
+        self.theme = self.load_theme(theme_name.lower() + ".json")
         self.apply_theme()
         
         # Apply font to all styles
@@ -114,11 +114,11 @@ class CodeEditor(QsciScintilla):
         else:
             super().wheelEvent(event)
 
-    def load_theme(self):
+    def load_theme(self, theme_file):
         """Load theme from JSON file"""
         try:
             script_dir = Path(__file__).parent
-            theme_path = script_dir / "themes" / "khaki.json"
+            theme_path = script_dir / "themes" / theme_file
             
             with open(theme_path, 'r') as f:
                 return json.load(f)
@@ -678,7 +678,7 @@ class MainWindow(QMainWindow):
         # Initialize TabWidget with custom styling
         self.tabWidget = QTabWidget()
         self.tabWidget.setTabsClosable(True)
-        self.tabWidget.tabCloseRequested.connect(self.close_tab)
+        self.tabWidget.tabCloseRequested.connect(self.close_file)
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
         
         # Install event filter for right mouse click on tabs
@@ -938,14 +938,12 @@ class MainWindow(QMainWindow):
                 self.current_tab_index, 
                 Path(current_editor.file_path).name
             )
-            # print(f"Content to save: {current_editor.text()}")  # Debugging line
-            
             return True
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save file: {str(e)}")
             return False
 
-    def close_tab(self, index):
+    def close_file(self, index):
         """Handle closing a tab"""
         editor = self.tabWidget.widget(index)
         if editor.isModified():
@@ -1082,7 +1080,6 @@ class MainWindow(QMainWindow):
                     
                     # Load saved files
                     files           = session_data.get('open_files', [])
-                    saved_editors   = session_data.get('saved_editors', [])
                     unsaved_files   = session_data.get('unsaved_files', [])
                     current_tab     = session_data.get('current_tab', 0)
                     
@@ -1098,15 +1095,12 @@ class MainWindow(QMainWindow):
                             
                         if Path(file_path).exists():
                             self.open_file(file_path, cursor_pos)
-                            
-                    # Restore saved editor
-                    for editor in saved_editors:
-                        pass
                     
                     # Restore unsaved files
                     for unsaved in unsaved_files:
                         editor = CodeEditor(self)
-                        editor.setText(unsaved['content'])
+                        with open(unsaved['backup_path'], 'r', encoding='utf-8') as f:
+                            editor.setText(f.read())
                         editor.setCursorPosition(*tuple(unsaved['cursor']))
                         editor.setModified(True)
                         
@@ -1120,12 +1114,29 @@ class MainWindow(QMainWindow):
                         else:
                             tab_name = Path(unsaved['backup_path']).stem
                         
-                        index = self.tabWidget.addTab(editor, tab_name)
+                        self.current_tab_index = self.tabWidget.addTab(editor, tab_name)
                     
                     # Restore the last active tab
                     if self.tabWidget.count() > current_tab:
                         self.tabWidget.setCurrentIndex(current_tab)
-                        
+
+                # Delete the unsaved files in the backup folder
+                for unsaved in unsaved_files:
+                    if 'backup_path' in unsaved:
+                        backup_file = Path(unsaved['backup_path'])
+                        if backup_file.exists():
+                            backup_file.unlink()
+                
+                # Remove unsaved files in session file after restore
+                with open(self.session_file, 'w', encoding='utf-8') as f:
+                    session_data.pop('unsaved_files', None)
+                    json.dump(session_data, f)
+
+            else:
+                # Create session file if it does not exist
+                with open(self.session_file, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
+                
         except Exception as e:
             QMessageBox.warning(self, "Session Load Error", 
                               f"Error loading session: {str(e)}")
@@ -1174,7 +1185,7 @@ class MainWindow(QMainWindow):
                         # Store the backup information
                         session_data['unsaved_files'].append({
                             'backup_path': backup_path,
-                            'content': content,
+                            # 'content': content,
                             'cursor': cursor_pos,
                             'original_path': getattr(editor, 'file_path', None),
                             'tab_name': self.tabWidget.tabText(i),
@@ -1198,7 +1209,7 @@ class MainWindow(QMainWindow):
                 if event.button() == Qt.MouseButton.MiddleButton:  # Middle mouse button
                     tab_index = obj.tabAt(event.pos())
                     if tab_index != -1:  # Valid tab clicked
-                        self.close_tab(tab_index)  # Close the tab
+                        self.close_file(tab_index)  # Close the tab
                         return True
                 elif event.button() == Qt.MouseButton.RightButton:
                     tab_index = obj.tabAt(event.pos())
@@ -1231,7 +1242,7 @@ class MainWindow(QMainWindow):
         
         # Close File action
         close_action = QAction("Close File", self)
-        close_action.triggered.connect(lambda: self.close_tab(tab_index))
+        close_action.triggered.connect(lambda: self.close_file(tab_index))
         menu.addAction(close_action)
         
         # Copy Full File Path action

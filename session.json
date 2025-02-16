@@ -1,43 +1,13 @@
 {
     "open_files": [
         {
-            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/build.py",
+            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/main.py",
             "cursor": [
-                5,
-                35
-            ]
-        },
-        {
-            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/build.py",
-            "cursor": [
-                5,
-                35
+                24,
+                17
             ]
         }
     ],
-    "unsaved_files": [
-        {
-            "backup_path": "c:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\backups\\build_20250215_124324.txt",
-            "content": "import PyInstaller.__main__\nimport os\nfrom pathlib import Path\n\n# Get the current directory\ncurrent_dir = Path(__file__).parent\n\n# Define icon path\nicon_path = str(current_dir / \"icons\" / \"logoIcon.ico\")\n\nPyInstaller.__main__.run([\n    'main.py',\n    '--name=Taara_Notepad++',\n    '--onefile',\n    f'--icon={icon_path}',\n    '--noconsole',\n    '--add-data=themes/khaki.json;themes',\n    '--add-data=icons/*;icons',\n]) ",
-            "cursor": [
-                5,
-                35
-            ],
-            "original_path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/build.py",
-            "tab_name": "build.py*",
-            "timestamp": "20250215_124324"
-        },
-        {
-            "backup_path": "c:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\backups\\unsaved_20250215_124324_2.txt",
-            "content": "\u00e0dafsdfa",
-            "cursor": [
-                0,
-                8
-            ],
-            "original_path": null,
-            "tab_name": "Untitled*",
-            "timestamp": "20250215_124324"
-        }
-    ],
-    "current_tab": 2
+    "unsaved_files": [],
+    "current_tab": 0
 }
