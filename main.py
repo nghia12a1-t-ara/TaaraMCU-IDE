@@ -82,6 +82,10 @@ class CodeEditor(QsciScintilla):
         # Edit Action from User
         self.textChanged.connect(self.on_text_changed)
         
+        # Set the default page step for horizontal scroll bar
+        self.horizontalScrollBar().setSingleStep(20)  # Adjust the step size as needed
+        self.horizontalScrollBar().setPageStep(100)    # Set the page step size
+        
     def on_text_changed(self):
         """Handle text changes in the editor"""
         self.setModified(True)
@@ -666,7 +670,7 @@ class MainWindow(QMainWindow):
         self.setGeometry(200, 100, 1000, 600)
         
         # Set window icon
-        icon_path = "themes\\logoIcon.ico"
+        icon_path = "icons\\logoIcon.ico"
         self.setWindowIcon(QIcon(icon_path))
         
         # Initialize find dialog
@@ -706,6 +710,9 @@ class MainWindow(QMainWindow):
         # If no files were restored, create a new file
         if self.tabWidget.count() == 0:
             self.new_file()
+
+        # Initialize a list to keep track of closed files
+        self.closed_files = []
 
     def set_tab_style(self):
         """Set the style for tabs"""
@@ -802,7 +809,13 @@ class MainWindow(QMainWindow):
         self.findAction = QAction("Find", self)
         self.findAction.setShortcut("Ctrl+F")
         self.findAction.triggered.connect(self.show_find_dialog)
-        self.addAction(self.findAction)  # Make the shortcut work globally
+        self.addAction(self.findAction)     # Make the shortcut work globally
+
+        # Add action for reopening the last closed file
+        self.reopenAction = QAction("Reopen Last Closed File", self)
+        self.reopenAction.setShortcut("Ctrl+T")
+        self.reopenAction.triggered.connect(self.reopen_last_closed_file)
+        self.addAction(self.reopenAction)   # Make the shortcut work globally
 
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
@@ -829,6 +842,7 @@ class MainWindow(QMainWindow):
         fileMenu.addAction(self.openAction)
         fileMenu.addAction(self.saveAction)
         fileMenu.addSeparator()
+        fileMenu.addAction(self.reopenAction)  # Add the reopen action to the menu
         fileMenu.addAction(self.exitAction)
 
         # Edit Menu
@@ -863,6 +877,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.newAction)
         toolbar.addAction(self.openAction)
         toolbar.addAction(self.saveAction)
+        toolbar.addAction(self.reopenAction)  # Add the reopen action to the toolbar
 
     def new_file(self):
         """Create a new empty file"""
@@ -962,6 +977,10 @@ class MainWindow(QMainWindow):
                     return  # Don't close if save was cancelled
             elif reply == QMessageBox.StandardButton.Cancel:
                 return  # Don't close if user cancelled
+        
+        # Store the closed file information
+        if hasattr(editor, 'file_path'):
+            self.closed_files.append((editor.file_path, editor.text(), editor.getCursorPosition()))
         
         # Remove the tab
         self.tabWidget.removeTab(index)
@@ -1264,6 +1283,17 @@ class MainWindow(QMainWindow):
         if current_editor:
             current_index = self.tabWidget.indexOf(current_editor)
             self.set_tab_background_color(current_index, "changed")
+
+    def reopen_last_closed_file(self):
+        """Reopen the last closed file"""
+        if self.closed_files:
+            file_path, content, cursor_pos = self.closed_files.pop()  # Get the last closed file info
+            self.open_file(file_path, cursor_pos)  # Open the file with the saved cursor position
+            editor = self.get_current_editor()
+            if editor:
+                editor.setText(content)     # Restore the content
+                editor.setModified(False)   # Mark as saved
+                self.set_tab_background_color(self.tabWidget.indexOf(editor), "saved")
 
 def main():
     app = QApplication(sys.argv)

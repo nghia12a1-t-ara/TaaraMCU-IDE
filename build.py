@@ -15,5 +15,4 @@ PyInstaller.__main__.run([
     f'--icon={icon_path}',
     '--noconsole',
     '--add-data=themes/khaki.json;themes',
-    '--add-data=icons/*;icons',
 ]) 
