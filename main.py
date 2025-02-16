@@ -30,6 +30,7 @@ from datetime import datetime
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki"):
         super().__init__(parent)
+        self.GUI = parent
         
         # Font configuration
         self.text_font = QFont("Consolas", 16)
@@ -77,6 +78,13 @@ class CodeEditor(QsciScintilla):
         self.setIndentationGuides(True)
         self.setAutoIndent(True)
         self.setBackspaceUnindents(True)
+        
+        # Edit Action from User
+        self.textChanged.connect(self.on_text_changed)
+        
+    def on_text_changed(self):
+        """Handle text changes in the editor"""
+        self.setModified(True)
 
     def maintain_margin_font(self):
         """Keep margin font size fixed regardless of zoom level"""
@@ -664,6 +672,9 @@ class MainWindow(QMainWindow):
         # Initialize find dialog
         self.find_dialog = None
         
+        # Initialize Tab File Manager
+        self.current_tab_index = -1
+        
         # Initialize TabWidget with custom styling
         self.tabWidget = QTabWidget()
         self.tabWidget.setTabsClosable(True)
@@ -679,7 +690,7 @@ class MainWindow(QMainWindow):
         self.set_tab_style()
         
         # Create actions, menu and toolbar
-        self.create_actions()
+        self.control_shorcut_actions()
         self.create_menubar()
         self.create_toolbar()
         
@@ -711,9 +722,10 @@ class MainWindow(QMainWindow):
                 margin-right: 2px;
             }
             QTabBar::tab:selected {
-                background: #FFE4B5;  /* Moccasin color for selected tab */
+                background: #dcffbd;  /* Moccasin color for selected tab */
                 border-bottom: none;
                 margin-bottom: -1px;
+                font-weight: bold;
             }
             QTabBar::tab:!selected {
                 background: #F0F0F0;
@@ -733,12 +745,17 @@ class MainWindow(QMainWindow):
 
     def on_tab_changed(self, index):
         """Handle tab change event"""
+        current_editor = self.get_current_editor()
+        
         # Update the UI to reflect the current tab
         if index >= 0:
             # You can add additional handling here if needed
+            current_index_file_status = "saved" if not current_editor.isModified() else "changed"
+            self.set_tab_background_color(index, current_index_file_status)
             self.tabWidget.setCurrentIndex(index)
+            self.current_tab_index = index
 
-    def create_actions(self):
+    def control_shorcut_actions(self):
         # File actions
         self.newAction = QAction("New", self)
         self.newAction.setShortcut("Ctrl+N")
@@ -788,20 +805,20 @@ class MainWindow(QMainWindow):
         self.addAction(self.findAction)  # Make the shortcut work globally
 
     def handle_edit_action(self, action):
-        editor = self.get_current_editor()
-        if editor:
+        current_editor = self.get_current_editor()
+        if current_editor:
             if action == "cut":
-                editor.cut()
+                current_editor.cut()
             elif action == "copy":
-                editor.copy()
+                current_editor.copy()
             elif action == "paste":
-                editor.paste()
+                current_editor.paste()
             elif action == "undo":
-                editor.undo()
+                current_editor.undo()
             elif action == "redo":
-                editor.redo()
+                current_editor.redo()
             elif action == "select_all":
-                editor.selectAll()
+                current_editor.selectAll()
 
     def create_menubar(self):
         menubar = self.menuBar()
@@ -850,6 +867,7 @@ class MainWindow(QMainWindow):
     def new_file(self):
         """Create a new empty file"""
         editor = CodeEditor(self)  # Ensure self is passed as the parent
+        editor.textChanged.connect(self.on_editor_text_changed)  # Connect the signal
         self.tabWidget.addTab(editor, "Untitled")
         self.tabWidget.setCurrentWidget(editor)  # Set the new editor as the current widget
 
@@ -875,7 +893,8 @@ class MainWindow(QMainWindow):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
                 
-                editor = CodeEditor()
+                editor = CodeEditor(self)
+                editor.textChanged.connect(self.on_editor_text_changed)  # Connect the signal
                 editor.setText(text)
                 editor.file_path = file_path
                 editor.setModified(False)
@@ -895,6 +914,7 @@ class MainWindow(QMainWindow):
         current_editor = self.get_current_editor()
         if current_editor is None:
             return
+        self.set_tab_background_color(self.current_tab_index, "saved")
 
         if not hasattr(current_editor, 'file_path'):
             file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "All Files (*.*)")
@@ -910,16 +930,12 @@ class MainWindow(QMainWindow):
             # Mark the editor as not modified
             current_editor.setModified(False)
             
-            # Update the tab title to remove the asterisk
-            current_tab_index = self.tabWidget.indexOf(current_editor)
-            if current_tab_index != -1:
-                tab_text = self.tabWidget.tabText(current_tab_index)
-                if tab_text.endswith('*'):
-                    self.tabWidget.setTabText(current_tab_index, tab_text[:-1])  # Remove the asterisk
+            # Update Tab Color Background
+            self.set_tab_background_color(self.current_tab_index, "saved")
             
             # Update the tab title to the file name
             self.tabWidget.setTabText(
-                current_tab_index, 
+                self.current_tab_index, 
                 Path(current_editor.file_path).name
             )
             # print(f"Content to save: {current_editor.text()}")  # Debugging line
@@ -928,13 +944,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save file: {str(e)}")
             return False
-
-    def get_current_editor(self):
-        """Return the currently active editor"""
-        current_index = self.tabWidget.currentIndex()
-        if current_index != -1:
-            return self.tabWidget.widget(current_index)
-        return None
 
     def close_tab(self, index):
         """Handle closing a tab"""
@@ -966,6 +975,89 @@ class MainWindow(QMainWindow):
     def about_app(self):
         QMessageBox.information(self, "About", "This is a Notepad++ style Text Editor, develop by Nghia Taarabt and Channel laptrinhdientu.com\nDebugger integration coming soon!")
 
+    def set_tab_background_color(self, index, hex_color):
+        """Set the background color of a specific tab"""
+        if 0 <= index < self.tabWidget.count():
+            if hex_color == "changed":
+                self.tabWidget.setStyleSheet("""
+                    QTabWidget::pane {
+                        border: 1px solid #C2C7CB;
+                        background: #F0F0F0;
+                    }
+                    QTabBar::tab {
+                        background: #E1E1E1;
+                        border: 1px solid #C4C4C3;
+                        padding: 5px 10px;
+                        margin-right: 2px;
+                    }
+                    QTabBar::tab:selected {
+                        background: #edd19d;  /* Moccasin color for selected tab */
+                        border-bottom: none;
+                        margin-bottom: -1px;
+                        font-weight: bold;
+                    }
+                    QTabBar::tab:!selected {
+                        background: #F0F0F0;
+                    }
+                    QTabBar::tab:!selected:hover {
+                        background: #E8E8E8;
+                    }
+                    QTabBar::close-button {
+                        image: url(icons/close.png);
+                        subcontrol-position: right;
+                    }
+                    QTabBar::close-button:hover {
+                        background: #FFA07A;  /* Light salmon color for close button hover */
+                        border-radius: 2px;
+                    }
+                """)
+            elif hex_color == "saved":
+                self.tabWidget.setStyleSheet("""
+                    QTabWidget::pane {
+                        border: 1px solid #C2C7CB;
+                        background: #F0F0F0;
+                    }
+                    QTabBar::tab {
+                        background: #E1E1E1;
+                        border: 1px solid #C4C4C3;
+                        padding: 5px 10px;
+                        margin-right: 2px;
+                    }
+                    QTabBar::tab:selected {
+                        background: #dcffbd;  /* Moccasin color for selected tab */
+                        border-bottom: none;
+                        margin-bottom: -1px;
+                        font-weight: bold;
+                    }
+                    QTabBar::tab:!selected {
+                        background: #F0F0F0;
+                    }
+                    QTabBar::tab:!selected:hover {
+                        background: #E8E8E8;
+                    }
+                    QTabBar::close-button {
+                        image: url(icons/close.png);
+                        subcontrol-position: right;
+                    }
+                    QTabBar::close-button:hover {
+                        background: #FFA07A;  /* Light salmon color for close button hover */
+                        border-radius: 2px;
+                    }
+                """)
+            #self.tabWidget.tabBar().setTabData(index, {"background-color": hex_color})
+
+    def set_tabtext_color(self, index, hex_color):
+        """Set the text color of a specific tab"""
+        if 0 <= index < self.tabWidget.count():
+            self.tabWidget.tabBar().setStyleSheet(f"QTabBar::tab::selected {{ color: {hex_color}; }}")
+
+    def get_current_editor(self):
+        """Return the currently active editor"""
+        current_index = self.tabWidget.currentIndex()
+        if current_index != -1:
+            return self.tabWidget.widget(current_index)
+        return None
+
     def show_find_dialog(self):
         if not self.find_dialog:
             self.find_dialog = FindDialog(self)
@@ -989,9 +1081,10 @@ class MainWindow(QMainWindow):
                     session_data = json.load(f)
                     
                     # Load saved files
-                    files = session_data.get('open_files', [])
-                    unsaved_files = session_data.get('unsaved_files', [])
-                    current_tab = session_data.get('current_tab', 0)
+                    files           = session_data.get('open_files', [])
+                    saved_editors   = session_data.get('saved_editors', [])
+                    unsaved_files   = session_data.get('unsaved_files', [])
+                    current_tab     = session_data.get('current_tab', 0)
                     
                     # Restore saved files
                     for file_info in files:
@@ -1005,10 +1098,14 @@ class MainWindow(QMainWindow):
                             
                         if Path(file_path).exists():
                             self.open_file(file_path, cursor_pos)
+                            
+                    # Restore saved editor
+                    for editor in saved_editors:
+                        pass
                     
                     # Restore unsaved files
                     for unsaved in unsaved_files:
-                        editor = CodeEditor()
+                        editor = CodeEditor(self)
                         editor.setText(unsaved['content'])
                         editor.setCursorPosition(*tuple(unsaved['cursor']))
                         editor.setModified(True)
@@ -1022,10 +1119,6 @@ class MainWindow(QMainWindow):
                             tab_name = unsaved['tab_name']
                         else:
                             tab_name = Path(unsaved['backup_path']).stem
-                        
-                        # Add asterisk to show unsaved status
-                        if not tab_name.endswith('*'):
-                            tab_name += '*'
                         
                         index = self.tabWidget.addTab(editor, tab_name)
                     
@@ -1053,7 +1146,7 @@ class MainWindow(QMainWindow):
                 content = editor.text()
                 
                 # Store information about saved files
-                if hasattr(editor, 'file_path') and editor.file_path:
+                if hasattr(editor, 'file_path') and editor.file_path and not editor.isModified():
                     session_data['open_files'].append({
                         'path': editor.file_path,
                         'cursor': cursor_pos
@@ -1099,10 +1192,15 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def eventFilter(self, obj, event):
-        """Handle right mouse click on tabs"""
+        """Handle right mouse click on tabs and middle mouse button click to close tabs"""
         if obj is self.tabWidget.tabBar():
             if event.type() == event.Type.MouseButtonRelease:
-                if event.button() == Qt.MouseButton.RightButton:
+                if event.button() == Qt.MouseButton.MiddleButton:  # Middle mouse button
+                    tab_index = obj.tabAt(event.pos())
+                    if tab_index != -1:  # Valid tab clicked
+                        self.close_tab(tab_index)  # Close the tab
+                        return True
+                elif event.button() == Qt.MouseButton.RightButton:
                     tab_index = obj.tabAt(event.pos())
                     if tab_index != -1:  # Valid tab clicked
                         # Use mapToGlobal to get the global position
@@ -1148,6 +1246,13 @@ class MainWindow(QMainWindow):
         
         # Show the context menu
         menu.exec(pos)
+
+    def on_editor_text_changed(self):
+        """Handle text changes in the editor"""
+        current_editor = self.get_current_editor()  # Get the current editor instance
+        if current_editor:
+            current_index = self.tabWidget.indexOf(current_editor)
+            self.set_tab_background_color(current_index, "changed")
 
 def main():
     app = QApplication(sys.argv)
