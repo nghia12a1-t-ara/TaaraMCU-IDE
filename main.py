@@ -86,6 +86,9 @@ class CodeEditor(QsciScintilla):
         self.horizontalScrollBar().setSingleStep(20)  # Adjust the step size as needed
         self.horizontalScrollBar().setPageStep(100)    # Set the page step size
         
+        self.setMouseTracking(True)  # Enable mouse tracking
+        self.last_highlighted_word = None  # To keep track of the last highlighted word
+
     def on_text_changed(self):
         """Handle text changes in the editor"""
         self.setModified(True)
@@ -195,8 +198,49 @@ class CodeEditor(QsciScintilla):
             if not self.lexer.paper(style).isValid():
                 self.lexer.setPaper(QColor(editor_bg), style)
 
+    def comment_lines(self):
+        """Comment or uncomment the selected lines or the current line."""
+        # Get the cursor position and selection
+        start_pos = self.SendScintilla(QsciScintilla.SCI_GETSELECTIONSTART)
+        end_pos = self.SendScintilla(QsciScintilla.SCI_GETSELECTIONEND)
+
+        # Determine the first and last lines of the selection
+        start_line = self.SendScintilla(QsciScintilla.SCI_LINEFROMPOSITION, start_pos)
+        end_line = self.SendScintilla(QsciScintilla.SCI_LINEFROMPOSITION, end_pos)
+
+        # If no text is selected, only take the line containing the cursor
+        if start_pos == end_pos:
+            start_line = end_line = self.SendScintilla(QsciScintilla.SCI_LINEFROMPOSITION, start_pos)
+
+        # Check if all selected lines are commented or not
+        all_commented = True
+        lines = []
+        
+        for line in range(start_line, end_line + 1):
+            line_text = self.text(line).rstrip()
+            lines.append(line_text)
+            if not line_text.lstrip().startswith("//"):
+                all_commented = False
+
+        # Process comment/uncomment each line
+        new_lines = []
+        for line_text in lines:
+            if all_commented:
+                new_lines.append(line_text.lstrip("//").lstrip())  # Remove comment
+            else:
+                new_lines.append("// " + line_text)  # Add comment
+
+        # Convert new_text (str) to bytes (UTF-8)
+        new_text = "\n".join(new_lines)
+        new_text_bytes = new_text.encode("utf-8")
+
+        # Replace content with new text
+        self.SendScintilla(QsciScintilla.SCI_SETTARGETSTART, self.SendScintilla(QsciScintilla.SCI_POSITIONFROMLINE, start_line))
+        self.SendScintilla(QsciScintilla.SCI_SETTARGETEND, self.SendScintilla(QsciScintilla.SCI_GETLINEENDPOSITION, end_line))
+        self.SendScintilla(QsciScintilla.SCI_REPLACETARGET, len(new_text_bytes), new_text_bytes)
+
 # Add this class for the Find Dialog
-class FindDialog(QDialog):
+class FindDialog(QDialog): 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
@@ -879,6 +923,12 @@ class MainWindow(QMainWindow):
         self.goToLineAction.triggered.connect(self.show_go_to_line_dialog)
         self.addAction(self.goToLineAction)             # Make the shortcut work globally
 
+        # Add shortcut for commenting/uncommenting
+        self.commentAction = QAction("Comment/Uncomment", self)
+        self.commentAction.setShortcut("Ctrl+Q")
+        self.commentAction.triggered.connect(lambda: self.handle_edit_action("comment"))
+        self.addAction(self.commentAction)
+
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
         if current_editor:
@@ -894,6 +944,8 @@ class MainWindow(QMainWindow):
                 current_editor.redo()
             elif action == "select_all":
                 current_editor.selectAll()
+            elif action == "comment":
+                current_editor.comment_lines()
 
     def create_menubar(self):
         menubar = self.menuBar()
