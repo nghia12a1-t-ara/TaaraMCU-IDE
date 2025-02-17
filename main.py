@@ -663,6 +663,56 @@ class FindDialog(QDialog):
         else:
             QMessageBox.information(self, "Find All", "No matches found in any open documents")
 
+class GoToLineDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Go To...")
+        
+        # Create layout
+        layout = QVBoxLayout()
+        
+        # Current line label
+        self.current_line_label = QLabel(f"You are here: Line {parent.get_current_editor().getCursorPosition()[0] + 1}")
+        layout.addWidget(self.current_line_label)
+        
+        # Line number input
+        self.line_input = QLineEdit()
+        layout.addWidget(QLabel("You want to go to:"))
+        layout.addWidget(self.line_input)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        go_button = QPushButton("Go")
+        go_button.clicked.connect(self.go_to_line)
+        button_layout.addWidget(go_button)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+
+    def go_to_line(self):
+        """Navigate to the specified line number."""
+        line_number = self.line_input.text()
+        if not line_number.isdigit():
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid line number.")
+            return
+        
+        line_number = int(line_number) - 1  # Convert to zero-based index
+        editor = self.parent().get_current_editor()
+        
+        if editor:
+            total_lines = editor.lines()
+            if line_number < 0 or line_number >= total_lines:
+                QMessageBox.warning(self, "Out of Range", f"You can't go further than: {total_lines}")
+                return
+            
+            editor.setCursorPosition(line_number, 0)  # Move cursor to the specified line
+            self.accept()  # Close the dialog
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -813,7 +863,7 @@ class MainWindow(QMainWindow):
 
         # Add action for reopening the last closed file
         self.reopenAction = QAction("Reopen Last Closed File", self)
-        self.reopenAction.setShortcut("Ctrl+G")
+        self.reopenAction.setShortcut("Ctrl+H")
         self.reopenAction.triggered.connect(self.reopen_last_closed_file)
         self.addAction(self.reopenAction)   # Make the shortcut work globally
         
@@ -822,6 +872,12 @@ class MainWindow(QMainWindow):
         self.closeTabAction.setShortcut("Ctrl+F4")
         self.closeTabAction.triggered.connect(self.close_current_tab)
         self.addAction(self.closeTabAction)  # Make the shortcut work globally
+
+        # Add action for Go To Line
+        self.goToLineAction = QAction("Go To Line", self)
+        self.goToLineAction.setShortcut("Ctrl+G") # Change to a unique shortcut
+        self.goToLineAction.triggered.connect(self.show_go_to_line_dialog)
+        self.addAction(self.goToLineAction)             # Make the shortcut work globally
 
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
@@ -1307,6 +1363,11 @@ class MainWindow(QMainWindow):
         if current_index != -1:
             self.close_file(current_index)  # Call the existing close_file method
             
+    def show_go_to_line_dialog(self):
+        """Show the Go To Line dialog."""
+        dialog = GoToLineDialog(self)
+        dialog.exec()
+
 def main():
     app = QApplication(sys.argv)
     window = MainWindow()

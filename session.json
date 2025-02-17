@@ -3,19 +3,12 @@
         {
             "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/.gitignore",
             "cursor": [
-                1,
-                0
+                0,
+                12
             ]
         },
         {
             "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/session.json",
-            "cursor": [
-                8,
-                10
-            ]
-        },
-        {
-            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/main.py",
             "cursor": [
                 0,
                 0
@@ -24,11 +17,11 @@
         {
             "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/build.py",
             "cursor": [
-                3,
-                0
+                14,
+                26
             ]
         }
     ],
     "unsaved_files": [],
-    "current_tab": 3
+    "current_tab": 2
 }
