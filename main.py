@@ -929,6 +929,13 @@ class MainWindow(QMainWindow):
         self.commentAction.triggered.connect(lambda: self.handle_edit_action("comment"))
         self.addAction(self.commentAction)
 
+        # Add Word Wrap action
+        self.wordWrapAction = QAction("Word Wrap", self)
+        self.wordWrapAction.setCheckable(True)  # Make it checkable
+        self.wordWrapAction.setShortcut("Ctrl+W")  # Optional shortcut
+        self.wordWrapAction.triggered.connect(self.toggle_word_wrap)
+        self.addAction(self.wordWrapAction)  # Make the shortcut work globally
+
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
         if current_editor:
@@ -983,15 +990,16 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
         # Add icons to actions
-        self.newAction.setIcon(QIcon("icons/new.png"))
-        self.openAction.setIcon(QIcon("icons/open.png"))
-        self.saveAction.setIcon(QIcon("icons/save.png"))
+        self.newAction.setIcon(QIcon("icons/new.svg"))
+        self.openAction.setIcon(QIcon("icons/open.svg"))
+        self.saveAction.setIcon(QIcon("icons/save.svg"))
 
         # Add actions to toolbar
+        self.wordWrapAction.setIcon(QIcon("icons/word-wrap.svg"))
         toolbar.addAction(self.newAction)
         toolbar.addAction(self.openAction)
         toolbar.addAction(self.saveAction)
-        toolbar.addAction(self.reopenAction)  # Add the reopen action to the toolbar
+        toolbar.addAction(self.wordWrapAction)
 
     def new_file(self):
         """Create a new empty file"""
@@ -1030,6 +1038,9 @@ class MainWindow(QMainWindow):
                 
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)
+                
+                # Set horizontal scroll bar to page left
+                editor.horizontalScrollBar().setValue(0)  # Set to the leftmost position
                 
                 filename = Path(file_path).name
                 index = self.tabWidget.addTab(editor, filename)
@@ -1419,6 +1430,18 @@ class MainWindow(QMainWindow):
         """Show the Go To Line dialog."""
         dialog = GoToLineDialog(self)
         dialog.exec()
+
+    def toggle_word_wrap(self):
+        """Toggle word wrap in the current editor."""
+        current_editor = self.get_current_editor()
+        if current_editor:
+            # Check the current wrap mode and toggle accordingly
+            if current_editor.wrapMode() == QsciScintilla.WrapMode.WrapWord:
+                current_editor.setWrapMode(QsciScintilla.WrapMode.WrapNone)  # Disable wrap
+                self.wordWrapAction.setChecked(False)  # Update UI action
+            else:
+                current_editor.setWrapMode(QsciScintilla.WrapMode.WrapWord)  # Enable word wrap
+                self.wordWrapAction.setChecked(True)  # Update UI action
 
 def main():
     app = QApplication(sys.argv)
