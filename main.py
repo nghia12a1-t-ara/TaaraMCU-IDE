@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QMenuBar, QDialog, QLabel, QLineEdit,
     QVBoxLayout, QHBoxLayout, QPushButton,
     QCheckBox, QGroupBox, QRadioButton,
-    QWidget, QMenu
+    QWidget, QMenu, QStatusBar
 )
 from PyQt6.QtGui import (
     QIcon, 
@@ -26,6 +26,7 @@ from PyQt6.Qsci import (
     QsciLexerPython
 )
 from datetime import datetime
+import chardet  # Import here to avoid unnecessary import if not used
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki"):
@@ -505,7 +506,6 @@ class FindDialog(QDialog):
             if self.regex_mode.isChecked():
                 try:
                     # Set up regex flags
-                    import re
                     flags = re.MULTILINE  # Always use multiline mode
                     if not self.match_case.isChecked():
                         flags |= re.IGNORECASE
@@ -808,6 +808,39 @@ class MainWindow(QMainWindow):
         # Initialize a list to keep track of closed files
         self.closed_files = []
 
+        # Create a status bar
+        self.mainStatusBar = QStatusBar()
+        self.setStatusBar(self.mainStatusBar)
+        
+        # Create labels for status information
+        self.length_label = QLabel("length: 0")
+        self.lines_label = QLabel("lines: 0")
+        self.cursor_label = QLabel("Ln: 1   Col: 1   Pos: 0")
+        self.line_endings_label = QLabel("Windows (CR LF)")
+        self.encoding_label = QLabel("UTF-8")
+        self.mode_label = QLabel("INS")
+
+        # Add labels to the status bar
+        self.mainStatusBar.addPermanentWidget(self.length_label)
+        self.mainStatusBar.addPermanentWidget(self.lines_label)
+        self.mainStatusBar.addPermanentWidget(self.cursor_label)
+        self.mainStatusBar.addPermanentWidget(self.line_endings_label)
+        self.mainStatusBar.addPermanentWidget(self.encoding_label)
+        self.mainStatusBar.addPermanentWidget(self.mode_label)
+
+        self.length_label.setFixedWidth(80)   # Cố định chiều rộng là 80px
+        self.lines_label.setFixedWidth(80)
+        self.cursor_label.setFixedWidth(200)
+        self.line_endings_label.setFixedWidth(120)
+        self.encoding_label.setFixedWidth(80)
+        self.mode_label.setFixedWidth(50)
+
+        # Initialize status bar fields
+        self.update_status_bar()
+
+        # Connect the cursor position change to update the status bar
+        self.tabWidget.currentChanged.connect(self.update_status_bar)
+
     def set_tab_style(self):
         """Set the style for tabs"""
         # Style for the tab widget
@@ -1005,6 +1038,7 @@ class MainWindow(QMainWindow):
         """Create a new empty file"""
         editor = CodeEditor(self)  # Ensure self is passed as the parent
         editor.textChanged.connect(self.on_editor_text_changed)  # Connect the signal
+        self.add_editor(editor)
         self.tabWidget.addTab(editor, "Untitled")
         self.tabWidget.setCurrentWidget(editor)  # Set the new editor as the current widget
 
@@ -1027,7 +1061,13 @@ class MainWindow(QMainWindow):
                     return
             
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                # Detect file encoding
+                with open(file_path, 'rb') as f:
+                    raw_data = f.read()
+                    result = chardet.detect(raw_data)
+                    encoding = result['encoding']
+                
+                with open(file_path, 'r', encoding=encoding) as f:
                     text = f.read()
                 
                 editor = CodeEditor(self)
@@ -1035,6 +1075,7 @@ class MainWindow(QMainWindow):
                 editor.setText(text)
                 editor.file_path = file_path
                 editor.setModified(False)
+                self.add_editor(editor)
                 
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)
@@ -1404,10 +1445,11 @@ class MainWindow(QMainWindow):
 
     def on_editor_text_changed(self):
         """Handle text changes in the editor"""
-        current_editor = self.get_current_editor()  # Get the current editor instance
+        current_editor = self.get_current_editor()
         if current_editor:
             current_index = self.tabWidget.indexOf(current_editor)
             self.set_tab_background_color(current_index, "changed")
+            self.update_status_bar()  # Update status bar on text change
 
     def reopen_last_closed_file(self):
         """Reopen the last closed file"""
@@ -1442,6 +1484,42 @@ class MainWindow(QMainWindow):
             else:
                 current_editor.setWrapMode(QsciScintilla.WrapMode.WrapWord)  # Enable word wrap
                 self.wordWrapAction.setChecked(True)  # Update UI action
+    
+    def add_editor(self, editor):
+        """Add a new editor and connect signals for real-time updates."""
+        editor.textChanged.connect(self.on_editor_text_changed)  # Update on text change
+        editor.cursorPositionChanged.connect(self.update_status_bar)  # Update on cursor position change
+    
+    def update_status_bar(self):
+        """Update the status bar with current editor information."""
+        editor = self.get_current_editor()
+        if editor:
+            text = editor.text()
+            length = len(editor.text())
+            lines = editor.SendScintilla(QsciScintilla.SCI_GETLINECOUNT)
+            cursor_line, cursor_col = editor.getCursorPosition()
+            cursor_pos = editor.SendScintilla(QsciScintilla.SCI_GETCURRENTPOS)
+
+            # Determine line endings based on the text content
+            if '\r\n' in text:
+                line_endings = "Windows (CR LF)"
+            elif '\n' in text:
+                line_endings = "Unix (LF)"
+            elif '\r' in text:
+                line_endings = "Old Mac (CR)"
+            else:
+                line_endings = "Unknown"
+            encoding = "UTF-8"  # You can implement detection if needed
+            mode = "INS" if editor.SendScintilla(QsciScintilla.SCI_GETOVERTYPE) == 0 else "OVR"
+
+            # Update the status labels
+            if hasattr(self, 'mainStatusBar'):
+                self.length_label.setText(f"length: {length}")
+                self.lines_label.setText(f"MaxLine: {lines}")
+                self.cursor_label.setText(f"Line: {cursor_line + 1}   Col: {cursor_col + 1}   Pos: {cursor_pos}")
+                self.line_endings_label.setText(line_endings)
+                self.encoding_label.setText(encoding)
+                self.mode_label.setText(mode)
 
 def main():
     app = QApplication(sys.argv)

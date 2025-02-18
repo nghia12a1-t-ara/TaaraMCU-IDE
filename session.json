@@ -10,25 +10,18 @@
         {
             "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/session.json",
             "cursor": [
-                3,
-                57
+                1,
+                7
             ]
         },
         {
             "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/build.py",
             "cursor": [
-                5,
-                26
-            ]
-        },
-        {
-            "path": "D:/Git_Repository/AVR_Microcontrollers/1_ATMega16_Basic_Peripheral/2_Timer/Timer1/Timer1_PWM/Timer1_PWM/main.c",
-            "cursor": [
-                5,
-                4
+                12,
+                29
             ]
         }
     ],
     "unsaved_files": [],
-    "current_tab": 1
+    "current_tab": 2
 }
