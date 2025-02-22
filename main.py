@@ -770,6 +770,10 @@ class MainWindow(QMainWindow):
         # Initialize find dialog
         self.find_dialog = None
         
+        # UI Manager Variables
+        self._showallchar   = False
+        self._wordwrap      = False
+
         # Initialize Tab File Manager
         self.current_tab_index = -1
         
@@ -834,6 +838,12 @@ class MainWindow(QMainWindow):
         self.line_endings_label.setFixedWidth(120)
         self.encoding_label.setFixedWidth(80)
         self.mode_label.setFixedWidth(50)
+
+        # Connect right-click event on encoding label
+        self.encoding_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.encoding_label.customContextMenuRequested.connect(self.show_encoding_menu)
+        self.line_endings_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.line_endings_label.customContextMenuRequested.connect(self.show_line_end_menu)
 
         # Initialize status bar fields
         self.update_status_bar()
@@ -969,6 +979,13 @@ class MainWindow(QMainWindow):
         self.wordWrapAction.triggered.connect(self.toggle_word_wrap)
         self.addAction(self.wordWrapAction)  # Make the shortcut work globally
 
+        # Add Show All Characters action
+        self.ShowAllCharAction = QAction("Show All Characters", self)
+        self.ShowAllCharAction.setCheckable(True)  # Make it checkable
+        self.ShowAllCharAction.setShortcut("Ctrl+T")  # Optional shortcut
+        self.ShowAllCharAction.triggered.connect(self.toggle_show_all_char)
+        self.addAction(self.ShowAllCharAction)  # Make the shortcut work globally
+
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
         if current_editor:
@@ -1026,13 +1043,15 @@ class MainWindow(QMainWindow):
         self.newAction.setIcon(QIcon("icons/new.svg"))
         self.openAction.setIcon(QIcon("icons/open.svg"))
         self.saveAction.setIcon(QIcon("icons/save.svg"))
+        self.wordWrapAction.setIcon(QIcon("icons/word-wrap.svg"))
+        self.ShowAllCharAction.setIcon(QIcon("icons/show_all_char.svg"))
 
         # Add actions to toolbar
-        self.wordWrapAction.setIcon(QIcon("icons/word-wrap.svg"))
         toolbar.addAction(self.newAction)
         toolbar.addAction(self.openAction)
         toolbar.addAction(self.saveAction)
         toolbar.addAction(self.wordWrapAction)
+        toolbar.addAction(self.ShowAllCharAction)
 
     def new_file(self):
         """Create a new empty file"""
@@ -1484,7 +1503,19 @@ class MainWindow(QMainWindow):
             else:
                 current_editor.setWrapMode(QsciScintilla.WrapMode.WrapWord)  # Enable word wrap
                 self.wordWrapAction.setChecked(True)  # Update UI action
-    
+
+    def show_all_char(self, isShowed):
+        current_editor = self.get_current_editor()
+        current_editor.setEolVisibility(isShowed)
+        self.ShowAllCharAction.setChecked(isShowed)  # Update UI action 
+
+    def toggle_show_all_char(self):
+        """Toggle show all character in the current editor."""
+        current_editor = self.get_current_editor()
+        self._showallchar = not self._showallchar
+        current_editor.setEolVisibility(self._showallchar)
+        self.ShowAllCharAction.setChecked(self._showallchar)
+       
     def add_editor(self, editor):
         """Add a new editor and connect signals for real-time updates."""
         editor.textChanged.connect(self.on_editor_text_changed)  # Update on text change
@@ -1501,14 +1532,17 @@ class MainWindow(QMainWindow):
             cursor_pos = editor.SendScintilla(QsciScintilla.SCI_GETCURRENTPOS)
 
             # Determine line endings based on the text content
-            if '\r\n' in text:
-                line_endings = "Windows (CR LF)"
-            elif '\n' in text:
-                line_endings = "Unix (LF)"
-            elif '\r' in text:
-                line_endings = "Old Mac (CR)"
+            eol_mode = editor.eolMode()
+            
+            if eol_mode == QsciScintilla.EolMode.EolWindows:
+                line_endings =  "Windows (CRLF)"
+            elif eol_mode == QsciScintilla.EolMode.EolUnix:
+                line_endings =  "Unix (LF)"
+            elif eol_mode == QsciScintilla.EolMode.EolMac:
+                line_endings =  "Mac (CR)"
             else:
-                line_endings = "Unknown"
+                line_endings =  "Unknown EOL"
+
             encoding = "UTF-8"  # You can implement detection if needed
             mode = "INS" if editor.SendScintilla(QsciScintilla.SCI_GETOVERTYPE) == 0 else "OVR"
 
@@ -1520,6 +1554,92 @@ class MainWindow(QMainWindow):
                 self.line_endings_label.setText(line_endings)
                 self.encoding_label.setText(encoding)
                 self.mode_label.setText(mode)
+
+    def show_encoding_menu(self, pos):
+        """Show context menu for encoding options."""
+        menu = QMenu(self)
+
+        # Define encoding options
+        encodings = ["UTF-8", "ISO-8859-1", "ASCII", "UTF-16", "UTF-32"]
+        for encoding in encodings:
+            action = QAction(encoding, self)
+            action.triggered.connect(lambda checked, enc=encoding: self.change_encoding(enc))
+            menu.addAction(action)
+
+        # Show the menu at the cursor position
+        menu.exec(self.encoding_label.mapToGlobal(pos))
+
+    def change_encoding(self, new_enc):
+        """Change the encoding of the current file."""
+        current_editor = self.get_current_editor()
+        if current_editor and hasattr(current_editor, 'file_path'):
+            try:
+                # Read the current content
+                coding1 = "utf-8"
+                coding2 = "gb18030"
+
+                f= open(current_editor.file_path, 'rb')
+                content = unicode(f.read(), coding2 )
+                f.close()
+                f= open(current_editor.file_path, 'wb')
+                f.write(content.encode(new_enc))
+                f.close()
+
+                # Save the current cursor position
+                # cursor_pos = current_editor.getCursorPosition()
+
+                # Write the content with the new encoding
+                # with open(current_editor.file_path, 'wb') as f:
+                    # f.write(content.encode(new_enc))
+
+                # Update the encoding label
+                self.encoding_label.setText(new_enc)
+
+                # Restore the cursor position
+                current_editor.setCursorPosition(*cursor_pos)
+
+                QMessageBox.information(self, "Encoding Changed", f"File encoding changed to {encoding}.")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Could not change encoding: {str(e)}")
+
+    def show_line_end_menu(self, pos):
+        """Show context menu for encoding options."""
+        menu = QMenu(self)
+
+        # Define encoding options
+        line_end_list = ["Windows (CRLF)", "Unix (LF)", "Mac (CR)"]
+        for line_end in line_end_list:
+            action = QAction(line_end, self)
+            action.triggered.connect(lambda checked, type=line_end: self.change_line_end(type))
+            menu.addAction(action)
+
+        # Show the menu at the cursor position
+        menu.exec(self.line_endings_label.mapToGlobal(pos))
+
+    def change_line_end(self, new_line_end):
+        """Change the encoding of the current file."""
+        current_editor = self.get_current_editor()
+        if current_editor and hasattr(current_editor, 'file_path'):
+            try:
+                if new_line_end == "Windows (CRLF)":
+                    current_editor.setEolMode(QsciScintilla.EolMode.EolWindows)
+                elif new_line_end == "Unix (LF)":
+                    current_editor.setEolMode(QsciScintilla.EolMode.EolUnix)
+                elif new_line_end == "Mac (CR)":
+                    current_editor.setEolMode(QsciScintilla.EolMode.EolMac)
+
+                # Save the current cursor position
+                cursor_pos = current_editor.getCursorPosition()
+
+                # Update the encoding label
+                self.line_endings_label.setText(new_line_end)
+
+                # Restore the cursor position
+                current_editor.setCursorPosition(*cursor_pos)
+
+                QMessageBox.information(self, "Line Ending Changed", f"File Line Ending changed to {new_line_end}.")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Could not change line endings: {str(e)}")
 
 def main():
     app = QApplication(sys.argv)
