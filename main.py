@@ -90,6 +90,28 @@ class CodeEditor(QsciScintilla):
         self.setMouseTracking(True)  # Enable mouse tracking
         self.last_highlighted_word = None  # To keep track of the last highlighted word
 
+        # Set auto completion source
+        self.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)  # Set to AcsAll
+        self.setAutoCompletionThreshold(2)  # Set threshold to 2
+        
+        # Enable Call Tips
+        self.setCallTipsVisible(3)  # Số lượng call tips hiển thị cùng lúc
+        self.setCallTipsStyle(QsciScintilla.CallTipsStyle.CallTipsContext)  # Hiển thị theo ngữ cảnh
+        self.setCallTipsPosition(QsciScintilla.CallTipsPosition.CallTipsAboveText)  # Hiển thị trên dòng nhập
+        self.setCallTipsBackgroundColor(QColor("#222831"))  # Màu nền
+        self.setCallTipsForegroundColor(QColor("#EEEEEE"))  # Màu chữ
+        self.setCallTipsHighlightColor(QColor("#00ADB5"))   # Màu highlight
+
+        # Configure Indicator for Highlight
+        self.highlight_indicator = 8  # ID indicator (from 0-31)
+        self.SendScintilla(self.SCI_INDICSETSTYLE, self.highlight_indicator, QsciScintilla.INDIC_BOX)
+        color = QColor("#FF5733")  # Màu cam
+        color_int = (color.red() << 16) | (color.green() << 8) | color.blue()
+        self.SendScintilla(self.SCI_INDICSETFORE, self.highlight_indicator, color_int)
+
+        # Connect event when cursor moves
+        self.cursorPositionChanged.connect(self.highlight_current_word)
+
     def on_text_changed(self):
         """Handle text changes in the editor"""
         self.setModified(True)
@@ -239,6 +261,29 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(QsciScintilla.SCI_SETTARGETSTART, self.SendScintilla(QsciScintilla.SCI_POSITIONFROMLINE, start_line))
         self.SendScintilla(QsciScintilla.SCI_SETTARGETEND, self.SendScintilla(QsciScintilla.SCI_GETLINEENDPOSITION, end_line))
         self.SendScintilla(QsciScintilla.SCI_REPLACETARGET, len(new_text_bytes), new_text_bytes)
+
+    def highlight_current_word(self):
+        """Highlight all occurrences of the current word in C/C++"""
+        self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.highlight_indicator)
+        self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, self.length())  # Clear old highlight
+
+        # Get the word at the cursor position
+        pos = self.SendScintilla(self.SCI_GETCURRENTPOS)
+        start = self.SendScintilla(self.SCI_WORDSTARTPOSITION, pos, True)
+        end = self.SendScintilla(self.SCI_WORDENDPOSITION, pos, True)
+        word = self.text()[start:end]
+
+        # Check if the word is valid (including underscores)
+        if not word or not any(c.isalnum() or c == '_' for c in word):
+            return  # Do not highlight if not a valid word
+
+        # Find all occurrences of this word in the text
+        text = self.text()
+        index = text.find(word)
+
+        while index != -1:
+            self.SendScintilla(self.SCI_INDICATORFILLRANGE, index, len(word))
+            index = text.find(word, index + len(word))
 
 # Add this class for the Find Dialog
 class FindDialog(QDialog): 
@@ -1640,6 +1685,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Line Ending Changed", f"File Line Ending changed to {new_line_end}.")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Could not change line endings: {str(e)}")
+
+    def enable_folding(editor: QsciScintilla):
+        editor.setMarginWidth(2, 15)  # Đặt chiều rộng margin thứ 2 (chứa folding)
+        editor.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)  # Kiểu hiển thị folding
 
 def main():
     app = QApplication(sys.argv)
