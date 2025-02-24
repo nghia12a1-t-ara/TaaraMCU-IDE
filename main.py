@@ -2,7 +2,7 @@ import sys
 import json
 from pathlib import Path
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, 
+    QApplication, QMainWindow, QTabWidget,
     QFileDialog, QMessageBox, QToolBar,
     QMenuBar, QDialog, QLabel, QLineEdit,
     QVBoxLayout, QHBoxLayout, QPushButton,
@@ -10,15 +10,17 @@ from PyQt6.QtWidgets import (
     QWidget, QMenu, QStatusBar
 )
 from PyQt6.QtGui import (
-    QIcon, 
+    QIcon,
     QAction,
     QFont,
-    QColor
+    QColor,
+    QMouseEvent
 )
 from PyQt6.QtCore import (
     Qt,
     QPoint,
-    QSize
+    QSize,
+    QTimer
 )
 from PyQt6.Qsci import (
     QsciScintilla,
@@ -26,50 +28,53 @@ from PyQt6.Qsci import (
     QsciLexerPython
 )
 from datetime import datetime
-import chardet  # Import here to avoid unnecessary import if not used
+import chardet
+from ctags_handler import CtagsHandler
+import os
+import subprocess
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki"):
         super().__init__(parent)
         self.GUI = parent
-        
+
         # Font configuration
         self.text_font = QFont("Consolas", 16)
         self.margin_font = QFont("Consolas", 18)  # Fixed size for margin
-        
+
         # Lexer configuration
         self.lexer = QsciLexerCPP()
         self.lexer.setDefaultFont(self.text_font)
-        
+
         # Load and apply theme
         self.theme = self.load_theme(theme_name.lower() + ".json")
         self.apply_theme()
-        
+
         # Apply font to all styles
         for style in range(128):
             self.lexer.setFont(self.text_font, style)
-        
+
         # Apply lexer to QScintilla
         self.setLexer(self.lexer)
-        
+
         # Line number margin configuration
         self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
         self.setMarginWidth(0, "0000")  # Width for line numbers
         self.setMarginsForegroundColor(QColor("#2B2B2B"))  # Dark gray for line numbers
         self.setMarginsBackgroundColor(QColor("#D3CBB7"))  # Darker background for margin
         self.setMarginsFont(self.margin_font)
-        
+
         # Add separator line after line numbers
         self.setMarginType(1, QsciScintilla.MarginType.SymbolMargin)
         self.setMarginWidth(1, 20)  # Width of separator
-        
+
         # Current line highlighting
         self.setCaretLineVisible(True)
-        
+
         # Configure search indicators
         self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, 0)
         self.setIndicatorDrawUnder(True, 0)
-        
+
         # Set global font
         self.setFont(self.text_font)
 
@@ -79,21 +84,21 @@ class CodeEditor(QsciScintilla):
         self.setIndentationGuides(True)
         self.setAutoIndent(True)
         self.setBackspaceUnindents(True)
-        
+
         # Edit Action from User
         self.textChanged.connect(self.on_text_changed)
-        
+
         # Set the default page step for horizontal scroll bar
         self.horizontalScrollBar().setSingleStep(20)  # Adjust the step size as needed
         self.horizontalScrollBar().setPageStep(100)    # Set the page step size
-        
+
         self.setMouseTracking(True)  # Enable mouse tracking
         self.last_highlighted_word = None  # To keep track of the last highlighted word
 
         # Set auto completion source
         self.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)  # Set to AcsAll
         self.setAutoCompletionThreshold(2)  # Set threshold to 2
-        
+
         # Enable Call Tips
         self.setCallTipsVisible(3)  # Số lượng call tips hiển thị cùng lúc
         self.setCallTipsStyle(QsciScintilla.CallTipsStyle.CallTipsContext)  # Hiển thị theo ngữ cảnh
@@ -111,6 +116,23 @@ class CodeEditor(QsciScintilla):
 
         # Connect event when cursor moves
         self.cursorPositionChanged.connect(self.highlight_current_word)
+
+        # Set up Hotspot style for clickable keywords
+        HOTSPOT_STYLE = 10
+        self.SendScintilla(QsciScintilla.SCI_STYLESETHOTSPOT, HOTSPOT_STYLE, True)
+
+        # Create timer for deferred updates
+        self.update_timer = QTimer(self)
+        self.update_timer.setSingleShot(True)
+        self.update_timer.timeout.connect(self.deferred_update_status_bar)
+        self.cursorPositionChanged.connect(self.schedule_update)
+        self.textChanged.connect(self.schedule_update)
+
+    def schedule_update(self):
+        self.update_timer.start(100)  # Trì hoãn 100ms
+
+    def deferred_update_status_bar(self):
+        self.GUI.update_status_bar()  # Gọi hàm cập nhật thanh trạng thái
 
     def on_text_changed(self):
         """Handle text changes in the editor"""
@@ -149,7 +171,7 @@ class CodeEditor(QsciScintilla):
         try:
             script_dir = Path(__file__).parent
             theme_path = script_dir / "themes" / theme_file
-            
+
             with open(theme_path, 'r') as f:
                 return json.load(f)
         except Exception as e:
@@ -186,10 +208,10 @@ class CodeEditor(QsciScintilla):
         for token in token_colors:
             scope = token.get("scope", "")
             settings = token.get("settings", {})
-            
+
             # Handle both string and list scopes
             scopes = [scope] if isinstance(scope, str) else scope
-            
+
             for scope in scopes:
                 if scope in style_map:
                     style = style_map[scope]
@@ -203,15 +225,15 @@ class CodeEditor(QsciScintilla):
         self.setCaretForegroundColor(QColor(colors.get("editorCursor.foreground", "#4D4D4D")))
         self.setSelectionBackgroundColor(QColor(colors.get("editor.selectionBackground", "#D7FF87")))
         self.setSelectionForegroundColor(QColor(editor_fg))
-        
+
         # Set margin colors (darker theme)
         self.setMarginsForegroundColor(QColor("#2B2B2B"))  # Dark gray for line numbers
         self.setMarginsBackgroundColor(QColor("#D3CBB7"))  # Darker khaki for margin background
-        
+
         # Set indent guides color
         indent_guide_color = colors.get("editorIndentGuide.background", "#586E7580")
         self.setIndentationGuidesBackgroundColor(QColor(indent_guide_color))
-        
+
         # Set whitespace color
         whitespace_color = colors.get("editorWhitespace.foreground", "#586E7580")
         self.setWhitespaceForegroundColor(QColor(whitespace_color))
@@ -238,7 +260,7 @@ class CodeEditor(QsciScintilla):
         # Check if all selected lines are commented or not
         all_commented = True
         lines = []
-        
+
         for line in range(start_line, end_line + 1):
             line_text = self.text(line).rstrip()
             lines.append(line_text)
@@ -264,41 +286,198 @@ class CodeEditor(QsciScintilla):
 
     def highlight_current_word(self):
         """Highlight all occurrences of the current word in C/C++"""
+        # Đặt indicator hiện tại
         self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.highlight_indicator)
-        self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, self.length())  # Clear old highlight
+        
+        # Xóa highlight cũ
+        self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, self.length())
 
-        # Get the word at the cursor position
+        # Lấy vị trí con trỏ hiện tại
         pos = self.SendScintilla(self.SCI_GETCURRENTPOS)
         start = self.SendScintilla(self.SCI_WORDSTARTPOSITION, pos, True)
         end = self.SendScintilla(self.SCI_WORDENDPOSITION, pos, True)
-        word = self.text()[start:end]
 
-        # Check if the word is valid (including underscores)
+        # Lấy từ tại vị trí con trỏ
+        word = self.text()[start:end].strip()
+
+        # Kiểm tra xem từ có hợp lệ không (chỉ chứa chữ cái, số hoặc dấu gạch dưới)
         if not word or not any(c.isalnum() or c == '_' for c in word):
-            return  # Do not highlight if not a valid word
+            return
 
-        # Find all occurrences of this word in the text
-        text = self.text()
-        index = text.find(word)
+        # Thiết lập tìm kiếm với ranh giới từ
+        self.SendScintilla(self.SCI_SETSEARCHFLAGS, QsciScintilla.SCFIND_WHOLEWORD)
+        
+        # Lấy toàn bộ văn bản
+        full_text = self.text()
+        text_length = len(full_text)
+        search_pos = 0
 
-        while index != -1:
-            self.SendScintilla(self.SCI_INDICATORFILLRANGE, index, len(word))
-            index = text.find(word, index + len(word))
+        # Tìm và highlight tất cả các lần xuất hiện
+        while search_pos < text_length:
+            self.SendScintilla(self.SCI_SETTARGETSTART, search_pos)
+            self.SendScintilla(self.SCI_SETTARGETEND, text_length)
+            
+            found_pos = self.SendScintilla(self.SCI_SEARCHINTARGET, len(word), word.encode('utf-8'))
+            if found_pos == -1:  # Không còn từ nào được tìm thấy
+                break
+            
+            # Highlight từ tìm thấy
+            self.SendScintilla(self.SCI_INDICATORFILLRANGE, found_pos, len(word))
+            search_pos = found_pos + len(word)  # Tiếp tục tìm từ vị trí tiếp theo
+
+        # Khôi phục trạng thái tìm kiếm (nếu cần)
+        self.SendScintilla(self.SCI_SETSEARCHFLAGS, 0)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """Handle mouse press events."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            x = event.pos().x()
+            y = event.pos().y()
+            # Tính toán vị trí từ tọa độ chuột
+            position = self.SendScintilla(QsciScintilla.SCI_POSITIONFROMPOINT, x, y)
+            # Đặt con trỏ tại vị trí chính xác
+            line = self.SendScintilla(QsciScintilla.SCI_LINEFROMPOSITION, position)
+            index = position - self.SendScintilla(QsciScintilla.SCI_POSITIONFROMLINE, line)
+            self.setCursorPosition(line, index)
+
+            # Kiểm tra Ctrl+Click
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                word = self.getWordAtPosition(position)
+                if word:
+                    self.gotoDefinition(word)
+                    return  # Ngăn không gọi sự kiện mặc định nếu nhảy đến định nghĩa
+
+        super().mousePressEvent(event)
+
+    def getWordAtPosition(self, position):
+        """Get the keyword at the cursor position."""
+        start = self.SendScintilla(QsciScintilla.SCI_WORDSTARTPOSITION, position, True)
+        end = self.SendScintilla(QsciScintilla.SCI_WORDENDPOSITION, position, True)
+        return self.text()[start:end] if start != end else None
+
+    def gotoDefinition(self, word):
+        """Find the keyword definition in the tags file and jump to it."""
+        if not hasattr(self, 'file_path') or not self.file_path:
+            QMessageBox.warning(self, "CTags Error", "No file path available for this editor!")
+            return
+
+        tag_file = f"{self.file_path}.tags"  # Locate the tags file
+        if not os.path.exists(tag_file):
+            # Thử tạo lại file tags nếu nó không tồn tại
+            if not self.GUI.ctags_handler.generate_ctags():
+                QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
+                return
+            if not os.path.exists(tag_file):
+                QMessageBox.warning(self, "CTags Error", "Tags file does not exist!")
+                return
+
+        definition = self.find_tag_definition(tag_file, word)
+        if definition:
+            file_path, line_number = definition
+            self.open_file_at_line(file_path, line_number)
+        else:
+            QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
+
+    # def find_tag_definition(self, tag_file, word):
+    #     """Find the position of the keyword in the tags file."""
+    #     try:
+    #         with open(tag_file, "r", encoding="utf-8") as f:
+    #             for line in f:
+    #                 if line.startswith("!"):  # Bỏ qua các dòng comment trong file tags
+    #                     continue
+    #                 parts = line.strip().split("\t")
+    #                 if len(parts) >= 3 and parts[0] == word:
+    #                     file_path = parts[1]
+    #                     line_info = parts[2]
+    #                     # Xử lý dòng định nghĩa (có thể là số dòng hoặc pattern /^.../)
+    #                     if line_info.isdigit():
+    #                         line_number = int(line_info)
+    #                     elif line_info.startswith("/^") and line_info.endswith("/"):
+    #                         # Nếu là pattern, tìm dòng trong file
+    #                         pattern = line_info[2:-1]  # Bỏ /^ và /
+    #                         with open(file_path, "r", encoding="utf-8") as source_file:
+    #                             for i, source_line in enumerate(source_file, 1):
+    #                                 if pattern in source_line.strip():
+    #                                     line_number = i
+    #                                     break
+    #                             else:
+    #                                 continue
+    #                     else:
+    #                         continue
+    #                     return file_path, line_number
+    #         return None
+    #     except Exception as e:
+    #         QMessageBox.warning(self, "CTags Error", f"Error reading tags file: {str(e)}")
+    #         return None
+
+    def find_tag_definition(self, tag_file, word):
+        """Find the position of the keyword in the tags file."""
+        try:
+            with open(tag_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("!"):  # Bỏ qua các dòng comment trong file tags
+                        continue
+                    parts = line.strip().split("\t")
+                    if len(parts) < 3 or parts[0] != word:
+                        continue
+
+                    file_path = parts[1]
+                    line_info = parts[2]
+
+                    # Xử lý pattern từ ctags
+                    if line_info.startswith("/^") and line_info.endswith("$/;\""):
+                        # Loại bỏ `/^` ở đầu và `/;"` ở cuối
+                        pattern = line_info[2:-4].strip()
+                        with open(file_path, "r", encoding="utf-8") as source_file:
+                            for i, source_line in enumerate(source_file, 1):
+                                # So sánh pattern với dòng trong file nguồn
+                                if pattern in source_line.strip():
+                                    return file_path, i
+                    else:
+                        # Nếu line_info là số (ít xảy ra trong trường hợp này), dùng trực tiếp
+                        if line_info.isdigit():
+                            return file_path, int(line_info)
+
+            return None
+        except Exception as e:
+            QMessageBox.warning(self, "CTags Error", f"Error reading tags file: {str(e)}")
+            return None
+
+    def open_file_at_line(self, file_path, line_number):
+        """Open the file and jump to the corresponding line."""
+        if os.path.exists(file_path):
+            # Kiểm tra xem file đã mở chưa
+            for i in range(self.GUI.tabWidget.count()):
+                editor = self.GUI.tabWidget.widget(i)
+                if hasattr(editor, 'file_path') and editor.file_path == file_path:
+                    self.GUI.tabWidget.setCurrentIndex(i)
+                    editor.setCursorPosition(line_number - 1, 0)
+                    editor.ensureLineVisible(line_number - 1)
+                    return
+
+            # Nếu chưa mở, mở file mới
+            self.GUI.open_file(file_path)
+            editor = self.GUI.get_current_editor()
+            if editor:
+                editor.setCursorPosition(line_number - 1, 0)
+                editor.ensureLineVisible(line_number - 1)
+        else:
+            QMessageBox.warning(self, "CTags", f"File '{file_path}' does not exist.")
 
 # Add this class for the Find Dialog
-class FindDialog(QDialog): 
+class FindDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
         self.setWindowTitle("Find")
         self.setFixedWidth(450)
-        
+
         # Create tab widget
         self.tab_widget = QTabWidget()
         self.tab_widget.addTab(self.create_find_tab(), "Find")
         self.tab_widget.addTab(self.create_replace_tab(), "Replace")
         self.tab_widget.addTab(self.create_find_in_files_tab(), "Find in Files")
-        
+
         # Main layout
         layout = QVBoxLayout()
         layout.addWidget(self.tab_widget)
@@ -307,7 +486,7 @@ class FindDialog(QDialog):
     def create_find_tab(self):
         tab = QWidget()
         layout = QVBoxLayout()
-        
+
         # Find what
         find_layout = QHBoxLayout()
         find_label = QLabel("Find what:")
@@ -315,10 +494,10 @@ class FindDialog(QDialog):
         self.find_input.textChanged.connect(self.reset_search)
         find_layout.addWidget(find_label)
         find_layout.addWidget(self.find_input)
-        
+
         # Buttons group
         buttons_layout = QHBoxLayout()
-        
+
         # Left side buttons
         left_buttons = QVBoxLayout()
         self.find_next_button = QPushButton("Find Next")
@@ -327,7 +506,7 @@ class FindDialog(QDialog):
         self.count_button.clicked.connect(self.count_occurrences)
         left_buttons.addWidget(self.find_next_button)
         left_buttons.addWidget(self.count_button)
-        
+
         # Right side buttons
         right_buttons = QVBoxLayout()
         self.find_all_current_button = QPushButton("Find All in Current Document")
@@ -339,25 +518,25 @@ class FindDialog(QDialog):
         right_buttons.addWidget(self.find_all_current_button)
         right_buttons.addWidget(self.find_all_opened_button)
         right_buttons.addWidget(self.close_button)
-        
+
         buttons_layout.addLayout(left_buttons)
         buttons_layout.addLayout(right_buttons)
-        
+
         # Search options
         options_group = QGroupBox("Search Mode")
         options_layout = QVBoxLayout()
-        
+
         # Search mode options
         self.normal_mode = QRadioButton("Normal")
         self.normal_mode.setChecked(True)
         self.extended_mode = QRadioButton("Extended (\\n, \\r, \\t, \\0, ...)")
         self.regex_mode = QRadioButton("Regular expression")
-        
+
         options_layout.addWidget(self.normal_mode)
         options_layout.addWidget(self.extended_mode)
         options_layout.addWidget(self.regex_mode)
         options_group.setLayout(options_layout)
-        
+
         # Checkboxes
         checks_layout = QVBoxLayout()
         self.backward_check = QCheckBox("Backward direction")
@@ -365,12 +544,12 @@ class FindDialog(QDialog):
         self.whole_word = QCheckBox("Match whole word only")
         self.wrap_around = QCheckBox("Wrap around")
         self.wrap_around.setChecked(True)
-        
+
         checks_layout.addWidget(self.backward_check)
         checks_layout.addWidget(self.match_case)
         checks_layout.addWidget(self.whole_word)
         checks_layout.addWidget(self.wrap_around)
-        
+
         # Transparency options
         trans_group = QGroupBox("Transparency")
         trans_layout = QVBoxLayout()
@@ -378,12 +557,12 @@ class FindDialog(QDialog):
         self.on_losing_focus = QRadioButton("On losing focus")
         self.on_losing_focus.setChecked(True)
         self.always = QRadioButton("Always")
-        
+
         trans_layout.addWidget(self.transparency_check)
         trans_layout.addWidget(self.on_losing_focus)
         trans_layout.addWidget(self.always)
         trans_group.setLayout(trans_layout)
-        
+
         # Add all to main layout
         layout.addLayout(find_layout)
         layout.addLayout(buttons_layout)
@@ -391,57 +570,57 @@ class FindDialog(QDialog):
         layout.addLayout(checks_layout)
         layout.addWidget(trans_group)
         layout.addStretch()
-        
+
         tab.setLayout(layout)
         return tab
 
     def create_replace_tab(self):
         tab = QWidget()
         layout = QVBoxLayout()
-        
+
         # Find and Replace inputs
         find_layout = QHBoxLayout()
         find_label = QLabel("Find what:")
         self.replace_find_input = QLineEdit()
         find_layout.addWidget(find_label)
         find_layout.addWidget(self.replace_find_input)
-        
+
         replace_layout = QHBoxLayout()
         replace_label = QLabel("Replace with:")
         self.replace_input = QLineEdit()
         replace_layout.addWidget(replace_label)
         replace_layout.addWidget(self.replace_input)
-        
+
         # Buttons
         buttons_layout = QVBoxLayout()
         self.replace_find_next = QPushButton("Find Next")
         self.replace_button = QPushButton("Replace")
         self.replace_all_button = QPushButton("Replace All")
-        
+
         buttons_layout.addWidget(self.replace_find_next)
         buttons_layout.addWidget(self.replace_button)
         buttons_layout.addWidget(self.replace_all_button)
-        
+
         # Add all to main layout
         layout.addLayout(find_layout)
         layout.addLayout(replace_layout)
         layout.addLayout(buttons_layout)
         layout.addStretch()
-        
+
         tab.setLayout(layout)
         return tab
 
     def create_find_in_files_tab(self):
         tab = QWidget()
         layout = QVBoxLayout()
-        
+
         # Find input
         find_layout = QHBoxLayout()
         find_label = QLabel("Find what:")
         self.find_files_input = QLineEdit()
         find_layout.addWidget(find_label)
         find_layout.addWidget(self.find_files_input)
-        
+
         # Directory input
         dir_layout = QHBoxLayout()
         dir_label = QLabel("Directory:")
@@ -450,7 +629,7 @@ class FindDialog(QDialog):
         dir_layout.addWidget(dir_label)
         dir_layout.addWidget(self.dir_input)
         dir_layout.addWidget(self.browse_button)
-        
+
         # Filters
         filters_layout = QHBoxLayout()
         filters_label = QLabel("Filters:")
@@ -458,24 +637,24 @@ class FindDialog(QDialog):
         self.filters_input.setPlaceholderText("*.txt, *.py")
         filters_layout.addWidget(filters_label)
         filters_layout.addWidget(self.filters_input)
-        
+
         # Find button
         self.find_files_button = QPushButton("Find All")
-        
+
         # Add all to main layout
         layout.addLayout(find_layout)
         layout.addLayout(dir_layout)
         layout.addLayout(filters_layout)
         layout.addWidget(self.find_files_button)
         layout.addStretch()
-        
+
         tab.setLayout(layout)
         return tab
 
     def reset_search(self):
         editor = self.parent.get_current_editor()
         if editor:
-            editor.clearIndicatorRange(0, 0, editor.lines(), 
+            editor.clearIndicatorRange(0, 0, editor.lines(),
                                     len(editor.text()), 0)
 
     def find_next(self):
@@ -483,20 +662,20 @@ class FindDialog(QDialog):
         editor = self.parent.get_current_editor()
         if not editor:
             return
-        
+
         text = self.find_input.text()
         if not text:
             return
-        
+
         # Get current position
         line, index = editor.getCursorPosition()
-        
+
         # If there's a selection, start from the end of the selection
         if editor.hasSelectedText():
             sel_line, sel_index, _, _ = editor.getSelection()
             if (sel_line, sel_index) == (line, index):
                 line, index = editor.getSelection()[2:]
-        
+
         try:
             # Set search flags
             search_flags = 0
@@ -507,10 +686,10 @@ class FindDialog(QDialog):
                 search_flags |= QsciScintilla.SCFIND_MATCHCASE
             if self.whole_word.isChecked():
                 search_flags |= QsciScintilla.SCFIND_WHOLEWORD
-            
+
             # Set the search flags
             editor.SendScintilla(QsciScintilla.SCI_SETSEARCHFLAGS, search_flags)
-            
+
             found = editor.findFirst(
                 text,
                 self.regex_mode.isChecked(),      # Regular expression
@@ -522,10 +701,10 @@ class FindDialog(QDialog):
                 index,
                 True                              # Move cursor and show
             )
-            
+
             if not found:
                 QMessageBox.information(self, "Find", "No more occurrences found.")
-            
+
         except Exception as e:
             QMessageBox.warning(self, "Regex Error", f"Invalid regular expression: {str(e)}")
 
@@ -534,36 +713,36 @@ class FindDialog(QDialog):
         editor = self.parent.get_current_editor()
         if not editor:
             return
-        
+
         text = self.find_input.text()
         if not text:
             QMessageBox.information(self, "Count", "Please enter text to search for.")
             return
-        
+
         # Save current position
         original_line, original_index = editor.getCursorPosition()
-        
+
         try:
             # Get the full text content
             full_text = editor.text()
             count = 0
-            
+
             if self.regex_mode.isChecked():
                 try:
                     # Set up regex flags
                     flags = re.MULTILINE  # Always use multiline mode
                     if not self.match_case.isChecked():
                         flags |= re.IGNORECASE
-                    
+
                     # Compile and find all matches
                     pattern = re.compile(text, flags)
                     matches = pattern.finditer(full_text)
                     count = sum(1 for _ in matches)
-                    
+
                 except re.error as e:
                     QMessageBox.warning(self, "Regex Error", f"Invalid regular expression: {str(e)}")
                     return
-                
+
             else:
                 # Normal search
                 if self.whole_word.isChecked():
@@ -578,10 +757,10 @@ class FindDialog(QDialog):
                         count = full_text.count(text)
                     else:
                         count = full_text.lower().count(text.lower())
-            
+
             # Show result
             QMessageBox.information(self, "Count", f"Found {count} occurrence(s)")
-            
+
         finally:
             # Restore original position
             editor.setCursorPosition(original_line, original_index)
@@ -591,20 +770,20 @@ class FindDialog(QDialog):
         editor = self.parent.get_current_editor()
         if not editor:
             return
-        
+
         text = self.find_input.text()
         if not text:
             QMessageBox.information(self, "Find All", "Please enter text to search for.")
             return
-        
+
         # Clear previous highlights
         editor.clearIndicatorRange(0, 0, editor.lines(), len(editor.text()), 0)
-        
+
         try:
             # Get the full text content
             full_text = editor.text()
             matches = []
-            
+
             if self.regex_mode.isChecked():
                 try:
                     import re
@@ -612,10 +791,10 @@ class FindDialog(QDialog):
                     flags = re.MULTILINE
                     if not self.match_case.isChecked():
                         flags |= re.IGNORECASE
-                    
+
                     pattern = re.compile(text, flags)
                     matches = list(pattern.finditer(full_text))
-                    
+
                 except re.error as e:
                     QMessageBox.warning(self, "Regex Error", f"Invalid regular expression: {str(e)}")
                     return
@@ -623,58 +802,58 @@ class FindDialog(QDialog):
                 # Normal search
                 search_text = text
                 content = full_text
-                
+
                 if not self.match_case.isChecked():
                     search_text = text.lower()
                     content = full_text.lower()
-                
+
                 start = 0
                 while True:
                     index = content.find(search_text, start)
                     if index == -1:
                         break
-                        
+
                     # Check for whole word match if needed
                     if self.whole_word.isChecked():
                         # Check word boundaries
                         before = index == 0 or not content[index-1].isalnum()
-                        after = (index + len(search_text) >= len(content) or 
+                        after = (index + len(search_text) >= len(content) or
                                 not content[index + len(search_text)].isalnum())
                         if before and after:
                             matches.append((index, index + len(search_text)))
                     else:
                         matches.append((index, index + len(search_text)))
-                    
+
                     start = index + 1
-            
+
             # Highlight all matches
             for match in matches:
                 if isinstance(match, re.Match):
                     start, end = match.span()
                 else:
                     start, end = match
-                
+
                 # Convert string index to line and column
                 line_from = full_text.count('\n', 0, start)
                 line_to = full_text.count('\n', 0, end)
-                
+
                 # Find column positions
                 last_nl = full_text.rfind('\n', 0, start)
                 index_from = start - (last_nl + 1 if last_nl != -1 else 0)
-                
+
                 last_nl = full_text.rfind('\n', 0, end)
                 index_to = end - (last_nl + 1 if last_nl != -1 else 0)
-                
+
                 # Highlight the match
                 editor.fillIndicatorRange(line_from, index_from, line_to, index_to, 0)
-            
+
             # Show results
             count = len(matches)
             if count > 0:
                 QMessageBox.information(self, "Find All", f"Found {count} occurrence(s)")
             else:
                 QMessageBox.information(self, "Find All", "No matches found")
-                
+
         except Exception as e:
             QMessageBox.warning(self, "Error", f"An error occurred: {str(e)}")
 
@@ -682,26 +861,26 @@ class FindDialog(QDialog):
         """Find all occurrences in all opened documents"""
         if not self.parent.tabWidget.count():
             return
-        
+
         text = self.find_input.text()
         if not text:
             return
-        
+
         total_count = 0
         results = []
-        
+
         # Search in all tabs
         for i in range(self.parent.tabWidget.count()):
             editor = self.parent.tabWidget.widget(i)
             file_name = self.parent.tabWidget.tabText(i)
-            
+
             # Save current position
             original_line, original_index = editor.getCursorPosition()
-            
+
             try:
                 # Start from the beginning
                 editor.setCursorPosition(0, 0)
-                
+
                 # Set search flags
                 search_flags = 0
                 if self.regex_mode.isChecked():
@@ -711,9 +890,9 @@ class FindDialog(QDialog):
                     search_flags |= QsciScintilla.SCFIND_MATCHCASE
                 if self.whole_word.isChecked():
                     search_flags |= QsciScintilla.SCFIND_WHOLEWORD
-                    
+
                 editor.SendScintilla(QsciScintilla.SCI_SETSEARCHFLAGS, search_flags)
-                
+
                 # Find first occurrence
                 found = editor.findFirst(
                     text,
@@ -725,26 +904,26 @@ class FindDialog(QDialog):
                     0, 0,  # from start
                     False  # don't move cursor
                 )
-                
+
                 count = 0
                 while found:
                     # Get the selection range
                     line_from, index_from, line_to, index_to = editor.getSelection()
-                    
+
                     # Highlight the found text
                     editor.fillIndicatorRange(line_from, index_from, line_to, index_to, 0)
-                    
+
                     count += 1
                     found = editor.findNext()
-                
+
                 if count > 0:
                     results.append(f"{file_name}: {count} occurrence(s)")
                     total_count += count
-                    
+
             finally:
                 # Restore original position
                 editor.setCursorPosition(original_line, original_index)
-        
+
         # Show results
         if total_count > 0:
             result_text = "Found matches in:\n" + "\n".join(results)
@@ -756,31 +935,31 @@ class GoToLineDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Go To...")
-        
+
         # Create layout
         layout = QVBoxLayout()
-        
+
         # Current line label
         self.current_line_label = QLabel(f"You are here: Line {parent.get_current_editor().getCursorPosition()[0] + 1}")
         layout.addWidget(self.current_line_label)
-        
+
         # Line number input
         self.line_input = QLineEdit()
         layout.addWidget(QLabel("You want to go to:"))
         layout.addWidget(self.line_input)
-        
+
         # Buttons
         button_layout = QHBoxLayout()
         go_button = QPushButton("Go")
         go_button.clicked.connect(self.go_to_line)
         button_layout.addWidget(go_button)
-        
+
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
-        
+
         layout.addLayout(button_layout)
-        
+
         self.setLayout(layout)
 
     def go_to_line(self):
@@ -789,16 +968,16 @@ class GoToLineDialog(QDialog):
         if not line_number.isdigit():
             QMessageBox.warning(self, "Invalid Input", "Please enter a valid line number.")
             return
-        
+
         line_number = int(line_number) - 1  # Convert to zero-based index
         editor = self.parent().get_current_editor()
-        
+
         if editor:
             total_lines = editor.lines()
             if line_number < 0 or line_number >= total_lines:
                 QMessageBox.warning(self, "Out of Range", f"You can't go further than: {total_lines}")
                 return
-            
+
             editor.setCursorPosition(line_number, 0)  # Move cursor to the specified line
             self.accept()  # Close the dialog
 
@@ -807,49 +986,51 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Nghia Taarabt Notepad++")
         self.setGeometry(200, 100, 1000, 600)
-        
+
         # Set window icon
         icon_path = "icons\\logoIcon.ico"
         self.setWindowIcon(QIcon(icon_path))
-        
+
         # Initialize find dialog
         self.find_dialog = None
-        
+
         # UI Manager Variables
         self._showallchar   = False
         self._wordwrap      = False
 
+        self.ctags_handler  = None
+
         # Initialize Tab File Manager
         self.current_tab_index = -1
-        
+
         # Initialize TabWidget with custom styling
         self.tabWidget = QTabWidget()
         self.tabWidget.setTabsClosable(True)
         self.tabWidget.tabCloseRequested.connect(self.close_file)
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
-        
+
         # Install event filter for right mouse click on tabs
         self.tabWidget.tabBar().installEventFilter(self)
-        
+
         self.setCentralWidget(self.tabWidget)
-        
+
         # Set the tab style
         self.set_tab_style()
-        
+
         # Create actions, menu and toolbar
         self.control_shorcut_actions()
         self.create_menubar()
         self.create_toolbar()
-        
+
         # Set up paths for session and backup
         self.app_dir = Path(__file__).parent
         self.session_file = self.app_dir / "session.json"
         self.backup_dir = self.app_dir / "backups"
         self.backup_dir.mkdir(exist_ok=True)
-        
+
         # Load last session
         self.load_session()
-        
+
         # If no files were restored, create a new file
         if self.tabWidget.count() == 0:
             self.new_file()
@@ -860,7 +1041,7 @@ class MainWindow(QMainWindow):
         # Create a status bar
         self.mainStatusBar = QStatusBar()
         self.setStatusBar(self.mainStatusBar)
-        
+
         # Create labels for status information
         self.length_label = QLabel("length: 0")
         self.lines_label = QLabel("lines: 0")
@@ -935,7 +1116,7 @@ class MainWindow(QMainWindow):
     def on_tab_changed(self, index):
         """Handle tab change event"""
         current_editor = self.get_current_editor()
-        
+
         # Update the UI to reflect the current tab
         if index >= 0:
             # You can add additional handling here if needed
@@ -998,7 +1179,7 @@ class MainWindow(QMainWindow):
         self.reopenAction.setShortcut("Ctrl+H")
         self.reopenAction.triggered.connect(self.reopen_last_closed_file)
         self.addAction(self.reopenAction)   # Make the shortcut work globally
-        
+
         # Add action for closing the current tab
         self.closeTabAction = QAction("Close Tab", self)
         self.closeTabAction.setShortcut("Ctrl+F4")
@@ -1115,7 +1296,7 @@ class MainWindow(QMainWindow):
                 "",
                 "All Files (*.*)"
             )
-        
+
         if file_path:
             # Check if file is already open
             for i in range(self.tabWidget.count()):
@@ -1123,34 +1304,40 @@ class MainWindow(QMainWindow):
                 if hasattr(editor, 'file_path') and editor.file_path == file_path:
                     self.tabWidget.setCurrentIndex(i)
                     return
-            
+
             try:
                 # Detect file encoding
                 with open(file_path, 'rb') as f:
                     raw_data = f.read()
                     result = chardet.detect(raw_data)
                     encoding = result['encoding']
-                
+
                 with open(file_path, 'r', encoding=encoding) as f:
                     text = f.read()
-                
+
                 editor = CodeEditor(self)
                 editor.textChanged.connect(self.on_editor_text_changed)  # Connect the signal
                 editor.setText(text)
                 editor.file_path = file_path
                 editor.setModified(False)
                 self.add_editor(editor)
-                
+
+                # Initialize CtagsHandler for the current editor
+                self.ctags_handler = CtagsHandler(editor)
+
+                # Generate CTags for the opened file
+                self.ctags_handler.generate_ctags()
+
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)
-                
+
                 # Set horizontal scroll bar to page left
                 editor.horizontalScrollBar().setValue(0)  # Set to the leftmost position
-                
+
                 filename = Path(file_path).name
                 index = self.tabWidget.addTab(editor, filename)
                 self.tabWidget.setCurrentIndex(index)
-                
+
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
 
@@ -1171,16 +1358,16 @@ class MainWindow(QMainWindow):
             with open(current_editor.file_path, 'w', encoding='utf-8') as f:
                 f.write(current_editor.text())
                 # print(f"File saved: {current_editor.file_path}")  # Debugging line
-            
+
             # Mark the editor as not modified
             current_editor.setModified(False)
-            
+
             # Update Tab Color Background
             self.set_tab_background_color(self.current_tab_index, "saved")
-            
+
             # Update the tab title to the file name
             self.tabWidget.setTabText(
-                self.current_tab_index, 
+                self.current_tab_index,
                 Path(current_editor.file_path).name
             )
             return True
@@ -1194,27 +1381,27 @@ class MainWindow(QMainWindow):
         if editor.isModified():
             filename = self.tabWidget.tabText(index)
             reply = QMessageBox.question(
-                self, 
+                self,
                 "Save Changes",
                 f"Do you want to save changes to {filename}?",
-                QMessageBox.StandardButton.Save | 
-                QMessageBox.StandardButton.Discard | 
+                QMessageBox.StandardButton.Save |
+                QMessageBox.StandardButton.Discard |
                 QMessageBox.StandardButton.Cancel
             )
-            
+
             if reply == QMessageBox.StandardButton.Save:
                 if not self.save_file(editor):
                     return  # Don't close if save was cancelled
             elif reply == QMessageBox.StandardButton.Cancel:
                 return  # Don't close if user cancelled
-        
+
         # Store the closed file information
         if hasattr(editor, 'file_path'):
             self.closed_files.append((editor.file_path, editor.text(), editor.getCursorPosition()))
-        
+
         # Remove the tab
         self.tabWidget.removeTab(index)
-        
+
         # Create a new tab if this was the last one
         if self.tabWidget.count() == 0:
             self.new_file()
@@ -1308,13 +1495,13 @@ class MainWindow(QMainWindow):
     def show_find_dialog(self):
         if not self.find_dialog:
             self.find_dialog = FindDialog(self)
-        
+
         # Get selected text if any
         editor = self.get_current_editor()
         if editor and editor.hasSelectedText():
             self.find_dialog.find_input.setText(editor.selectedText())
             self.find_dialog.find_input.selectAll()
-        
+
         self.find_dialog.show()
         self.find_dialog.raise_()
         self.find_dialog.activateWindow()
@@ -1326,12 +1513,12 @@ class MainWindow(QMainWindow):
             if self.session_file.exists():
                 with open(self.session_file, 'r', encoding='utf-8') as f:
                     session_data = json.load(f)
-                    
+
                     # Load saved files
                     files           = session_data.get('open_files', [])
                     unsaved_files   = session_data.get('unsaved_files', [])
                     current_tab     = session_data.get('current_tab', 0)
-                    
+
                     # Restore saved files
                     for file_info in files:
                         if isinstance(file_info, str):
@@ -1341,10 +1528,10 @@ class MainWindow(QMainWindow):
                         else:
                             file_path = file_info['path']
                             cursor_pos = tuple(file_info['cursor'])
-                            
+
                         if Path(file_path).exists():
                             self.open_file(file_path, cursor_pos)
-                    
+
                     # Restore unsaved files
                     for unsaved in unsaved_files:
                         editor = CodeEditor(self)
@@ -1352,19 +1539,19 @@ class MainWindow(QMainWindow):
                             editor.setText(f.read())
                         editor.setCursorPosition(*tuple(unsaved['cursor']))
                         editor.setModified(True)
-                        
+
                         # Set file path if it was an existing file
                         if unsaved.get('original_path'):
                             editor.file_path = unsaved['original_path']
-                        
+
                         # Use original tab name or generate one from backup
                         if 'tab_name' in unsaved:
                             tab_name = unsaved['tab_name']
                         else:
                             tab_name = Path(unsaved['backup_path']).stem
-                        
+
                         self.current_tab_index = self.tabWidget.addTab(editor, tab_name)
-                    
+
                     # Restore the last active tab
                     if self.tabWidget.count() > current_tab:
                         self.tabWidget.setCurrentIndex(current_tab)
@@ -1375,7 +1562,7 @@ class MainWindow(QMainWindow):
                         backup_file = Path(unsaved['backup_path'])
                         if backup_file.exists():
                             backup_file.unlink()
-                
+
                 # Remove unsaved files in session file after restore
                 with open(self.session_file, 'w', encoding='utf-8') as f:
                     session_data.pop('unsaved_files', None)
@@ -1385,9 +1572,9 @@ class MainWindow(QMainWindow):
                 # Create session file if it does not exist
                 with open(self.session_file, 'w', encoding='utf-8') as f:
                     json.dump({}, f)
-                
+
         except Exception as e:
-            QMessageBox.warning(self, "Session Load Error", 
+            QMessageBox.warning(self, "Session Load Error",
                               f"Error loading session: {str(e)}")
 
     def closeEvent(self, event):
@@ -1398,20 +1585,20 @@ class MainWindow(QMainWindow):
                 'unsaved_files': [],
                 'current_tab': self.tabWidget.currentIndex()
             }
-            
+
             # Process each open tab
             for i in range(self.tabWidget.count()):
                 editor = self.tabWidget.widget(i)
                 cursor_pos = editor.getCursorPosition()
                 content = editor.text()
-                
+
                 # Store information about saved files
                 if hasattr(editor, 'file_path') and editor.file_path and not editor.isModified():
                     session_data['open_files'].append({
                         'path': editor.file_path,
                         'cursor': cursor_pos
                     })
-                
+
                 # Store content if the file is modified or is a new unsaved file
                 if editor.isModified() or not hasattr(editor, 'file_path'):
                     if content.strip():  # Only save if there's actual content
@@ -1424,13 +1611,13 @@ class MainWindow(QMainWindow):
                         else:
                             # For new files, use 'unsaved'
                             backup_name = f"unsaved_{timestamp}_{i}.txt"
-                        
+
                         backup_path = str(self.backup_dir / backup_name)
-                        
+
                         # Save the content to backup file
                         with open(backup_path, 'w', encoding='utf-8') as f:
                             f.write(content)
-                        
+
                         # Store the backup information
                         session_data['unsaved_files'].append({
                             'backup_path': backup_path,
@@ -1440,15 +1627,15 @@ class MainWindow(QMainWindow):
                             'tab_name': self.tabWidget.tabText(i),
                             'timestamp': timestamp
                         })
-            
+
             # Save session data
             with open(self.session_file, 'w', encoding='utf-8') as f:
                 json.dump(session_data, f, indent=4)
-                
+
         except Exception as e:
-            QMessageBox.warning(self, "Session Save Error", 
+            QMessageBox.warning(self, "Session Save Error",
                               f"Error saving session: {str(e)}")
-        
+
         event.accept()
 
     def eventFilter(self, obj, event):
@@ -1479,31 +1666,30 @@ class MainWindow(QMainWindow):
         if hasattr(editor, 'file_path') and editor.file_path:
             folder_path = Path(editor.file_path).parent
             if folder_path.exists():
-                import subprocess
                 subprocess.Popen(f'explorer "{folder_path}"')
 
     def show_tab_context_menu(self, tab_index, pos):
         """Show context menu for tab actions"""
         menu = QMenu(self)
-        
+
         # Get the editor associated with the tab
         editor = self.tabWidget.widget(tab_index)
-        
+
         # Close File action
         close_action = QAction("Close File", self)
         close_action.triggered.connect(lambda: self.close_file(tab_index))
         menu.addAction(close_action)
-        
+
         # Copy Full File Path action
         copy_path_action = QAction("Copy Full File Path", self)
         copy_path_action.triggered.connect(lambda: self.copy_full_file_path(editor))
         menu.addAction(copy_path_action)
-        
+
         # Open Containing Folder in Explorer action
         open_folder_action = QAction("Open Containing Folder in Explorer", self)
         open_folder_action.triggered.connect(lambda: self.open_containing_folder(editor))
         menu.addAction(open_folder_action)
-        
+
         # Show the context menu
         menu.exec(pos)
 
@@ -1531,7 +1717,7 @@ class MainWindow(QMainWindow):
         current_index = self.tabWidget.currentIndex()
         if current_index != -1:
             self.close_file(current_index)  # Call the existing close_file method
-            
+
     def show_go_to_line_dialog(self):
         """Show the Go To Line dialog."""
         dialog = GoToLineDialog(self)
@@ -1552,7 +1738,7 @@ class MainWindow(QMainWindow):
     def show_all_char(self, isShowed):
         current_editor = self.get_current_editor()
         current_editor.setEolVisibility(isShowed)
-        self.ShowAllCharAction.setChecked(isShowed)  # Update UI action 
+        self.ShowAllCharAction.setChecked(isShowed)  # Update UI action
 
     def toggle_show_all_char(self):
         """Toggle show all character in the current editor."""
@@ -1560,45 +1746,51 @@ class MainWindow(QMainWindow):
         self._showallchar = not self._showallchar
         current_editor.setEolVisibility(self._showallchar)
         self.ShowAllCharAction.setChecked(self._showallchar)
-       
+
     def add_editor(self, editor):
         """Add a new editor and connect signals for real-time updates."""
         editor.textChanged.connect(self.on_editor_text_changed)  # Update on text change
         editor.cursorPositionChanged.connect(self.update_status_bar)  # Update on cursor position change
-    
+
     def update_status_bar(self):
         """Update the status bar with current editor information."""
         editor = self.get_current_editor()
         if editor:
-            text = editor.text()
-            length = len(editor.text())
-            lines = editor.SendScintilla(QsciScintilla.SCI_GETLINECOUNT)
-            cursor_line, cursor_col = editor.getCursorPosition()
-            cursor_pos = editor.SendScintilla(QsciScintilla.SCI_GETCURRENTPOS)
+            # Chặn tín hiệu để tránh tác dụng phụ
+            editor.blockSignals(True)
+            try:
+                text = editor.text()
+                length = len(text)
+                lines = editor.SendScintilla(QsciScintilla.SCI_GETLINECOUNT)
+                cursor_line, cursor_col = editor.getCursorPosition()
+                cursor_pos = editor.SendScintilla(QsciScintilla.SCI_GETCURRENTPOS)
 
-            # Determine line endings based on the text content
-            eol_mode = editor.eolMode()
-            
-            if eol_mode == QsciScintilla.EolMode.EolWindows:
-                line_endings =  "Windows (CRLF)"
-            elif eol_mode == QsciScintilla.EolMode.EolUnix:
-                line_endings =  "Unix (LF)"
-            elif eol_mode == QsciScintilla.EolMode.EolMac:
-                line_endings =  "Mac (CR)"
-            else:
-                line_endings =  "Unknown EOL"
+                # Determine line endings based on the text content
+                eol_mode = editor.eolMode()
 
-            encoding = "UTF-8"  # You can implement detection if needed
-            mode = "INS" if editor.SendScintilla(QsciScintilla.SCI_GETOVERTYPE) == 0 else "OVR"
+                if eol_mode == QsciScintilla.EolMode.EolWindows:
+                    line_endings = "Windows (CRLF)"
+                elif eol_mode == QsciScintilla.EolMode.EolUnix:
+                    line_endings = "Unix (LF)"
+                elif eol_mode == QsciScintilla.EolMode.EolMac:
+                    line_endings = "Mac (CR)"
+                else:
+                    line_endings = "Unknown EOL"
 
-            # Update the status labels
-            if hasattr(self, 'mainStatusBar'):
-                self.length_label.setText(f"length: {length}")
-                self.lines_label.setText(f"MaxLine: {lines}")
-                self.cursor_label.setText(f"Line: {cursor_line + 1}   Col: {cursor_col + 1}   Pos: {cursor_pos}")
-                self.line_endings_label.setText(line_endings)
-                self.encoding_label.setText(encoding)
-                self.mode_label.setText(mode)
+                encoding = "UTF-8"  # You can implement detection if needed
+                mode = "INS" if editor.SendScintilla(QsciScintilla.SCI_GETOVERTYPE) == 0 else "OVR"
+
+                # Update the status labels
+                if hasattr(self, 'mainStatusBar'):
+                    self.length_label.setText(f"length: {length}")
+                    self.lines_label.setText(f"MaxLine: {lines}")
+                    self.cursor_label.setText(f"Line: {cursor_line + 1}   Col: {cursor_col + 1}   Pos: {cursor_pos}")
+                    self.line_endings_label.setText(line_endings)
+                    self.encoding_label.setText(encoding)
+                    self.mode_label.setText(mode)
+            finally:
+                # Khôi phục tín hiệu
+                editor.blockSignals(False)
 
     def show_encoding_menu(self, pos):
         """Show context menu for encoding options."""
@@ -1623,10 +1815,10 @@ class MainWindow(QMainWindow):
                 coding1 = "utf-8"
                 coding2 = "gb18030"
 
-                f= open(current_editor.file_path, 'rb')
-                content = unicode(f.read(), coding2 )
+                f = open(current_editor.file_path, 'rb')
+                content = unicode(f.read(), coding2)
                 f.close()
-                f= open(current_editor.file_path, 'wb')
+                f = open(current_editor.file_path, 'wb')
                 f.write(content.encode(new_enc))
                 f.close()
 
@@ -1635,7 +1827,7 @@ class MainWindow(QMainWindow):
 
                 # Write the content with the new encoding
                 # with open(current_editor.file_path, 'wb') as f:
-                    # f.write(content.encode(new_enc))
+                #     f.write(content.encode(new_enc))
 
                 # Update the encoding label
                 self.encoding_label.setText(new_enc)
@@ -1643,7 +1835,7 @@ class MainWindow(QMainWindow):
                 # Restore the cursor position
                 current_editor.setCursorPosition(*cursor_pos)
 
-                QMessageBox.information(self, "Encoding Changed", f"File encoding changed to {encoding}.")
+                QMessageBox.information(self, "Encoding Changed", f"File encoding changed to {new_enc}.")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Could not change encoding: {str(e)}")
 
@@ -1700,5 +1892,5 @@ if __name__ == "__main__":
     # Ensure the application directory exists
     app_dir = Path(__file__).parent
     app_dir.mkdir(exist_ok=True)
-    
+
     main()
