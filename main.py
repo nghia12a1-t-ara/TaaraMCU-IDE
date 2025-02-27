@@ -132,6 +132,10 @@ class CodeEditor(QsciScintilla):
         self.cursorPositionChanged.connect(self.schedule_update)
         self.textChanged.connect(self.schedule_update)
 
+        # Add cache variable for tags
+        self.tags_cache = {}  # Store tags content: {word: (file_path, line_number)}
+        self.last_modified = None  # Last modified time of the source file
+
     def schedule_update(self):
         self.update_timer.start(100)  # Trì hoãn 100ms
 
@@ -360,92 +364,64 @@ class CodeEditor(QsciScintilla):
         return self.text()[start:end] if start != end else None
 
     def gotoDefinition(self, word):
-        """Find the keyword definition in the tags file and jump to it."""
+        """Find the keyword definition using cached tags if available."""
         if not hasattr(self, 'file_path') or not self.file_path:
             QMessageBox.warning(self, "CTags Error", "No file path available for this editor!")
             return
 
-        tag_file = f"{self.file_path}.tags"  # Locate the tags file
-        if not os.path.exists(tag_file):
-            # Thử tạo lại file tags nếu nó không tồn tại
-            if not self.GUI.ctags_handler.generate_ctags():
-                QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
-                return
-            if not os.path.exists(tag_file):
+        tag_file = f"{self.file_path}.tags"
+
+        # Check if the source file has changed
+        current_modified = os.path.getmtime(self.file_path) if os.path.exists(self.file_path) else None
+        if self.last_modified != current_modified or not self.tags_cache:
+            # If the source file has changed or cache is empty, regenerate tags
+            if not os.path.exists(tag_file) or self.last_modified != current_modified:
+                if not self.GUI.ctags_handler.generate_ctags():
+                    QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
+                    return
+            if os.path.exists(tag_file):
+                self.update_tags_cache(tag_file)
+                self.last_modified = current_modified
+            else:
                 QMessageBox.warning(self, "CTags Error", "Tags file does not exist!")
                 return
 
-        definition = self.find_tag_definition(tag_file, word)
+        # Search in cache
+        definition = self.tags_cache.get(word)
         if definition:
             file_path, line_number = definition
             self.open_file_at_line(file_path, line_number)
         else:
             QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
 
-    # def find_tag_definition(self, tag_file, word):
-    #     """Find the position of the keyword in the tags file."""
-    #     try:
-    #         with open(tag_file, "r", encoding="utf-8") as f:
-    #             for line in f:
-    #                 if line.startswith("!"):  # Bỏ qua các dòng comment trong file tags
-    #                     continue
-    #                 parts = line.strip().split("\t")
-    #                 if len(parts) >= 3 and parts[0] == word:
-    #                     file_path = parts[1]
-    #                     line_info = parts[2]
-    #                     # Xử lý dòng định nghĩa (có thể là số dòng hoặc pattern /^.../)
-    #                     if line_info.isdigit():
-    #                         line_number = int(line_info)
-    #                     elif line_info.startswith("/^") and line_info.endswith("/"):
-    #                         # Nếu là pattern, tìm dòng trong file
-    #                         pattern = line_info[2:-1]  # Bỏ /^ và /
-    #                         with open(file_path, "r", encoding="utf-8") as source_file:
-    #                             for i, source_line in enumerate(source_file, 1):
-    #                                 if pattern in source_line.strip():
-    #                                     line_number = i
-    #                                     break
-    #                             else:
-    #                                 continue
-    #                     else:
-    #                         continue
-    #                     return file_path, line_number
-    #         return None
-    #     except Exception as e:
-    #         QMessageBox.warning(self, "CTags Error", f"Error reading tags file: {str(e)}")
-    #         return None
-
-    def find_tag_definition(self, tag_file, word):
-        """Find the position of the keyword in the tags file."""
+    def update_tags_cache(self, tag_file):
+        """Update cache from the tags file."""
+        self.tags_cache.clear()  # Clear old cache
         try:
             with open(tag_file, "r", encoding="utf-8") as f:
                 for line in f:
-                    if line.startswith("!"):  # Bỏ qua các dòng comment trong file tags
+                    if line.startswith("!"):  # Skip comments
                         continue
                     parts = line.strip().split("\t")
-                    if len(parts) < 3 or parts[0] != word:
+                    if len(parts) < 3:
                         continue
-
+                    symbol = parts[0]
                     file_path = parts[1]
                     line_info = parts[2]
 
-                    # Xử lý pattern từ ctags
+                    # Handle pattern or line number
                     if line_info.startswith("/^") and line_info.endswith("$/;\""):
-                        # Loại bỏ `/^` ở đầu và `/;"` ở cuối
                         pattern = line_info[2:-4].strip()
                         with open(file_path, "r", encoding="utf-8") as source_file:
                             for i, source_line in enumerate(source_file, 1):
-                                # So sánh pattern với dòng trong file nguồn
                                 if pattern in source_line.strip():
-                                    return file_path, i
-                    else:
-                        # Nếu line_info là số (ít xảy ra trong trường hợp này), dùng trực tiếp
-                        if line_info.isdigit():
-                            return file_path, int(line_info)
-
-            return None
+                                    self.tags_cache[symbol] = (file_path, i)
+                                    break
+                    elif line_info.isdigit():
+                        self.tags_cache[symbol] = (file_path, int(line_info))
         except Exception as e:
             QMessageBox.warning(self, "CTags Error", f"Error reading tags file: {str(e)}")
-            return None
+            self.tags_cache.clear()  # Clear cache if error occurs
 
     def open_file_at_line(self, file_path, line_number):
         """Open the file and jump to the corresponding line."""
