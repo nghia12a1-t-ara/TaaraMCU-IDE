@@ -32,9 +32,10 @@ import chardet
 from ctags_handler import CtagsHandler
 import os
 import subprocess
+import re
 
 class CodeEditor(QsciScintilla):
-    def __init__(self, parent=None, theme_name="Khaki"):
+    def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
         super().__init__(parent)
         self.GUI = parent
 
@@ -45,6 +46,9 @@ class CodeEditor(QsciScintilla):
         # Lexer configuration
         self.lexer = QsciLexerCPP()
         self.lexer.setDefaultFont(self.text_font)
+
+        # Set language for file
+        # self.set_language(language)
 
         # Load and apply theme
         self.theme = self.load_theme(theme_name.lower() + ".json")
@@ -464,6 +468,18 @@ class CodeEditor(QsciScintilla):
         else:
             QMessageBox.warning(self, "CTags", f"File '{file_path}' does not exist.")
 
+    def set_language(self, language):
+        if language == "Python":
+            self.lexer = QsciLexerPython()
+        elif language == "CPP":
+            self.lexer = QsciLexerCPP()
+        else:
+            self.lexer = None
+        if self.lexer:
+            self.lexer.setDefaultFont(self.text_font)
+            self.setLexer(self.lexer)
+            self.apply_theme()
+
 # Add this class for the Find Dialog
 class FindDialog(QDialog):
     def __init__(self, parent=None):
@@ -475,7 +491,7 @@ class FindDialog(QDialog):
         # Create tab widget
         self.tab_widget = QTabWidget()
         self.tab_widget.addTab(self.create_find_tab(), "Find")
-        self.tab_widget.addTab(self.create_replace_tab(), "Replace")
+        self.tab_widget.addTab(self.create_replace_tab(), "Replace")  # Added Replace tab
         self.tab_widget.addTab(self.create_find_in_files_tab(), "Find in Files")
 
         # Main layout
@@ -593,11 +609,14 @@ class FindDialog(QDialog):
 
         # Buttons
         buttons_layout = QVBoxLayout()
-        self.replace_find_next = QPushButton("Find Next")
+        self.replace_find_next_btn = QPushButton("Find Next")
+        self.replace_find_next_btn.clicked.connect(self.replace_find_next)
         self.replace_button = QPushButton("Replace")
+        self.replace_button.clicked.connect(self.replace)
         self.replace_all_button = QPushButton("Replace All")
+        self.replace_all_button.clicked.connect(self.replace_all)
 
-        buttons_layout.addWidget(self.replace_find_next)
+        buttons_layout.addWidget(self.replace_find_next_btn)
         buttons_layout.addWidget(self.replace_button)
         buttons_layout.addWidget(self.replace_all_button)
 
@@ -931,6 +950,89 @@ class FindDialog(QDialog):
         else:
             QMessageBox.information(self, "Find All", "No matches found in any open documents")
 
+    def replace_find_next(self):
+        """Find the next occurrence of the text to replace."""
+        editor = self.parent.get_current_editor()
+        if not editor or not self.replace_find_input.text():
+            return
+
+        text = self.replace_find_input.text()
+        line, index = editor.getCursorPosition()
+
+        # If there's a selection, start from the end of the selection
+        if editor.hasSelectedText():
+            sel_line, sel_index, _, _ = editor.getSelection()
+            if (sel_line, sel_index) == (line, index):
+                line, index = editor.getSelection()[2:]
+
+        # Search based on the options from the Find tab
+        found = editor.findFirst(
+            text,
+            self.regex_mode.isChecked(),
+            self.match_case.isChecked(),
+            self.whole_word.isChecked(),
+            self.wrap_around.isChecked(),
+            not self.backward_check.isChecked(),
+            line,
+            index,
+            True
+        )
+
+        if not found:
+            QMessageBox.information(self, "Replace", "No more occurrences found.")
+
+    def replace(self):
+        """Replace the current occurrence and find the next one."""
+        editor = self.parent.get_current_editor()
+        if not editor or not self.replace_find_input.text():
+            return
+
+        text = self.replace_find_input.text()
+        replacement = self.replace_input.text()
+
+        # If there's a matching selected text, replace it
+        if editor.hasSelectedText():
+            selected_text = editor.selectedText()
+            if (self.match_case.isChecked() and selected_text == text) or \
+               (not self.match_case.isChecked() and selected_text.lower() == text.lower()):
+                editor.replace(replacement)
+
+        # Find the next occurrence
+        self.replace_find_next()
+
+    def replace_all(self):
+        """Replace all occurrences in the text."""
+        editor = self.parent.get_current_editor()
+        if not editor or not self.replace_find_input.text():
+            return
+
+        text = self.replace_find_input.text()
+        replacement = self.replace_input.text()
+
+        # Start from the beginning of the text
+        editor.setCursorPosition(0, 0)
+        count = 0
+
+        # Find and replace all
+        found = editor.findFirst(
+            text,
+            self.regex_mode.isChecked(),
+            self.match_case.isChecked(),
+            self.whole_word.isChecked(),
+            False,  # No wrap to avoid looping
+            True,   # Forward direction
+            0, 0,   # Start from the beginning
+            False   # Don't move cursor
+        )
+
+        while found:
+            # Replace the found text
+            editor.replace(replacement)
+            count += 1
+            found = editor.findNext()  # Find the next occurrence
+
+        QMessageBox.information(self, "Replace All", f"Replaced {count} occurrence(s).")
+
 class GoToLineDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1212,6 +1314,14 @@ class MainWindow(QMainWindow):
         self.ShowAllCharAction.triggered.connect(self.toggle_show_all_char)
         self.addAction(self.ShowAllCharAction)  # Make the shortcut work globally
 
+        # Add action to change language
+        self.setPythonAction = QAction("Set Python Language", self)
+        self.setPythonAction.triggered.connect(lambda: self.set_editor_language("Python"))
+        self.setCPPAction = QAction("Set C++ Language", self)
+        self.setCPPAction.triggered.connect(lambda: self.set_editor_language("CPP"))
+        self.addAction(self.setPythonAction)
+        self.addAction(self.setCPPAction)
+
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
         if current_editor:
@@ -1259,6 +1369,16 @@ class MainWindow(QMainWindow):
         aboutAction = QAction("About", self)
         aboutAction.triggered.connect(self.about_app)
         helpMenu.addAction(aboutAction)
+
+        # Add Language menu
+        languageMenu = menubar.addMenu("Language")
+        languageMenu.addAction(self.setPythonAction)
+        languageMenu.addAction(self.setCPPAction)
+
+    def set_editor_language(self, language):
+        current_editor = self.get_current_editor()
+        if current_editor:
+            current_editor.set_language(language)
 
     def create_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
@@ -1321,6 +1441,15 @@ class MainWindow(QMainWindow):
                 editor.file_path = file_path
                 editor.setModified(False)
                 self.add_editor(editor)
+
+                # Determine the language from the file extension
+                # extension = Path(file_path).suffix.lower()
+                # if extension == '.py':
+                #     editor.set_language("Python")
+                # elif extension in ('.cpp', '.c', '.h', '.hpp'):
+                #     editor.set_language("CPP")
+                # else:
+                #     editor.set_language("CPP")
 
                 # Initialize CtagsHandler for the current editor
                 self.ctags_handler = CtagsHandler(editor)
