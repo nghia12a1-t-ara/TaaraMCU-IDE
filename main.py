@@ -183,7 +183,7 @@ class CodeEditor(QsciScintilla):
             with open(theme_path, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            # print(f"Error loading theme: {e}")
+            # # print(f"Error loading theme: {e}")
             return None
 
     def apply_theme(self):
@@ -292,6 +292,38 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(QsciScintilla.SCI_SETTARGETEND, self.SendScintilla(QsciScintilla.SCI_GETLINEENDPOSITION, end_line))
         self.SendScintilla(QsciScintilla.SCI_REPLACETARGET, len(new_text_bytes), new_text_bytes)
 
+    def get_word_at_position(self, position):
+        """Lấy toàn bộ từ tại vị trí position trong editor, xử lý đúng Unicode."""
+        # Xác định ranh giới của từ tại vị trí position
+        start_pos = self.SendScintilla(self.SCI_WORDSTARTPOSITION, position, True)
+        end_pos = self.SendScintilla(self.SCI_WORDENDPOSITION, position, True)
+
+        # Nếu vị trí không hợp lệ hoặc không nằm trong từ
+        if start_pos == end_pos:
+            return ""
+
+        # Lấy độ dài toàn bộ văn bản
+        text_length = self.SendScintilla(self.SCI_GETTEXTLENGTH)
+
+        # Kiểm tra ranh giới
+        if start_pos < 0 or end_pos > text_length or start_pos > end_pos:
+            return ""
+
+        # Tạo buffer cho đoạn văn bản
+        length = end_pos - start_pos + 1  # +1 cho ký tự null
+        buffer = bytes(length)
+
+        # Thiết lập khoảng vị trí để lấy đoạn văn bản
+        self.SendScintilla(self.SCI_SETTARGETSTART, start_pos)
+        self.SendScintilla(self.SCI_SETTARGETEND, end_pos)
+
+        # Lấy đoạn văn bản trực tiếp từ Scintilla dưới dạng byte
+        self.SendScintilla(self.SCI_GETTARGETTEXT, 0, buffer)
+
+        # Chuyển đổi từ byte sang chuỗi Unicode
+        word = buffer.decode('utf-8', errors='ignore').rstrip('\x00').strip()
+        return word
+
     def highlight_current_word(self):
         """Highlight all occurrences of the current word in C/C++"""
         # Đặt indicator hiện tại
@@ -302,11 +334,7 @@ class CodeEditor(QsciScintilla):
 
         # Lấy vị trí con trỏ hiện tại
         pos = self.SendScintilla(self.SCI_GETCURRENTPOS)
-        start = self.SendScintilla(self.SCI_WORDSTARTPOSITION, pos, True)
-        end = self.SendScintilla(self.SCI_WORDENDPOSITION, pos, True)
-
-        # Lấy từ tại vị trí con trỏ
-        word = self.text()[start:end].strip()
+        word = self.get_word_at_position(pos)
 
         # Kiểm tra xem từ có hợp lệ không (chỉ chứa chữ cái, số hoặc dấu gạch dưới)
         if not word or not any(c.isalnum() or c == '_' for c in word):
@@ -350,18 +378,12 @@ class CodeEditor(QsciScintilla):
 
             # Kiểm tra Ctrl+Click
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                word = self.getWordAtPosition(position)
+                word = self.get_word_at_position(position)
                 if word:
                     self.gotoDefinition(word)
                     return  # Ngăn không gọi sự kiện mặc định nếu nhảy đến định nghĩa
 
         super().mousePressEvent(event)
-
-    def getWordAtPosition(self, position):
-        """Get the keyword at the cursor position."""
-        start = self.SendScintilla(QsciScintilla.SCI_WORDSTARTPOSITION, position, True)
-        end = self.SendScintilla(QsciScintilla.SCI_WORDENDPOSITION, position, True)
-        return self.text()[start:end] if start != end else None
 
     def gotoDefinition(self, word):
         """Find the keyword definition using cached tags if available, only for source files."""
@@ -1449,9 +1471,6 @@ class MainWindow(QMainWindow):
                 if file_path.lower().endswith(SOURCE_EXTENSIONS):
                     self.ctags_handler = CtagsHandler(editor)
                     self.ctags_handler.generate_ctags()
-                    print(f"Generated CTags for source file: {file_path}")
-                else:
-                    print(f"Skipped CTags generation for non-source file: {file_path}")
 
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)
@@ -1480,7 +1499,7 @@ class MainWindow(QMainWindow):
         try:
             with open(current_editor.file_path, 'w', encoding='utf-8') as f:
                 f.write(current_editor.text())
-                # print(f"File saved: {current_editor.file_path}")  # Debugging line
+                # # print(f"File saved: {current_editor.file_path}")  # Debugging line
 
             # Mark the editor as not modified
             current_editor.setModified(False)

@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('themes/khaki.json', 'themes')],
+    datas=[('C:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\project_view.py', '.'), ('C:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\ctags_handler.py', '.'), ('C:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\themes\\khaki.json', 'themes')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['c:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\icons\\logoIcon.ico'],
+    icon=['C:\\Users\\ADMIN\\Desktop\\Debugger_Tools\\Taara_Debugger\\icons\\logoIcon.ico'],
 )

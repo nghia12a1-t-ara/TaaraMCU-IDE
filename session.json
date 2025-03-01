@@ -3,32 +3,33 @@
         {
             "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/main.py",
             "cursor": [
-                1737,
-                28
+                355,
+                0
             ]
         },
         {
-            "path": "C:/Users/ADMIN/Desktop/notepad-plus-plus-master/notepad-plus-plus-master/PowerEditor/src/dpiManagerV2.cpp",
+            "path": "D:/Git_Repository/ARM_Software_Test/HeapTest.c",
             "cursor": [
-                202,
-                43
+                14,
+                21
             ]
         },
         {
-            "path": "D:/Git_Repository/DataStructure_Algorithm_in_C/DS_CircularQueue/CircularQueue.c",
+            "path": "D:/Git_Repository/ARM_Software_Test/CMSIS-DSP-Example/SIMD_Test.c",
             "cursor": [
                 26,
-                22
+                26
             ]
         },
         {
-            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/test/main.c",
+            "path": "D:/Git_Repository/ARM_Software_Test/project.tags",
             "cursor": [
-                0,
-                9
+                1835,
+                112
             ]
         }
     ],
     "unsaved_files": [],
-    "current_tab": 3
+    "current_tab": 3,
+    "project_directory": "D:/Git_Repository/ARM_Software_Test"
 }

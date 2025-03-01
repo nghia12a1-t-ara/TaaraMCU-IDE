@@ -1,19 +1,1 @@
-import PyInstaller.__main__
-import os
-from pathlib import Path
-
-# Get the current directory
-current_dir = Path(__file__).parent
-
-# Define icon path
-icon_path = str(current_dir / "icons" / "logoIcon.ico")
-
-PyInstaller.__main__.run([
-    'main.py',
-    '--name=Taara_Notepad++',
-    '--onefile',
-    f'--icon={icon_path}',
-    '--noconsole',
-    '--add-data=themes/khaki.json;themes',
-    f'--distpath={current_dir}'
-]) 
+import PyInstaller.__main__import osfrom pathlib import Path# Get the current directorycurrent_dir = Path(__file__).parent# Define icon pathicon_path = str(current_dir / "icons" / "logoIcon.ico")# Danh sách các file nguồn .py cần đóng gói (ngoài main.py)source_files = [    str(current_dir / "project_view.py"),    str(current_dir / "ctags_handler.py"),    # Thêm các file .py khác nếu cần]# Tạo danh sách các tham số --add-dataadd_data_args = []for source_file in source_files:    # Thêm mỗi file .py vào thư mục gốc của file thực thi    add_data_args.extend(['--add-data', f"{source_file}{os.pathsep}."])# Thêm file dữ liệu (khaki.json)add_data_args.extend(['--add-data', f"{current_dir / 'themes' / 'khaki.json'}{os.pathsep}themes"])# Chạy PyInstallerPyInstaller.__main__.run([    'main.py',  # File chính    '--name=Taara_Notepad++',    '--onefile',    f'--icon={icon_path}',    '--noconsole',    *add_data_args,  # Thêm các file nguồn và dữ liệu    f'--distpath={current_dir}',    '--clean'  # Xóa các file tạm trước khi build để tránh lỗi])

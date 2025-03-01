@@ -1,8 +1,76 @@
-int myFunction(int x) {
+int __myFunction(int x) {
     return x + 1;
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 int main() {
-    int result = myFunction(5);
+    int result = __myFunction(5);
     return 0;
 }
