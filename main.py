@@ -32,7 +32,7 @@ import chardet
 from ctags_handler import CtagsHandler
 import os
 import subprocess
-import re
+from project_view import ProjectView
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
@@ -104,17 +104,17 @@ class CodeEditor(QsciScintilla):
         self.setAutoCompletionThreshold(2)  # Set threshold to 2
 
         # Enable Call Tips
-        self.setCallTipsVisible(3)  # Số lượng call tips hiển thị cùng lúc
-        self.setCallTipsStyle(QsciScintilla.CallTipsStyle.CallTipsContext)  # Hiển thị theo ngữ cảnh
-        self.setCallTipsPosition(QsciScintilla.CallTipsPosition.CallTipsAboveText)  # Hiển thị trên dòng nhập
-        self.setCallTipsBackgroundColor(QColor("#222831"))  # Màu nền
-        self.setCallTipsForegroundColor(QColor("#EEEEEE"))  # Màu chữ
-        self.setCallTipsHighlightColor(QColor("#00ADB5"))   # Màu highlight
+        self.setCallTipsVisible(3)  # Number of call tips displayed at the same time
+        self.setCallTipsStyle(QsciScintilla.CallTipsStyle.CallTipsContext)  # Display in context
+        self.setCallTipsPosition(QsciScintilla.CallTipsPosition.CallTipsAboveText)  # Display above the input line
+        self.setCallTipsBackgroundColor(QColor("#222831"))  # Background color
+        self.setCallTipsForegroundColor(QColor("#EEEEEE"))  # Text color
+        self.setCallTipsHighlightColor(QColor("#00ADB5"))   # Highlight color
 
         # Configure Indicator for Highlight
         self.highlight_indicator = 8  # ID indicator (from 0-31)
         self.SendScintilla(self.SCI_INDICSETSTYLE, self.highlight_indicator, QsciScintilla.INDIC_BOX)
-        color = QColor("#FF5733")  # Màu cam
+        color = QColor("#FF5733")  # Orange color
         color_int = (color.red() << 16) | (color.green() << 8) | color.blue()
         self.SendScintilla(self.SCI_INDICSETFORE, self.highlight_indicator, color_int)
 
@@ -364,17 +364,25 @@ class CodeEditor(QsciScintilla):
         return self.text()[start:end] if start != end else None
 
     def gotoDefinition(self, word):
-        """Find the keyword definition using cached tags if available."""
+        """Find the keyword definition using cached tags if available, only for source files."""
         if not hasattr(self, 'file_path') or not self.file_path:
             QMessageBox.warning(self, "CTags Error", "No file path available for this editor!")
             return
 
+        # Define recognized source code extensions
+        SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
+        
+        # Check if the current file is a source file
+        if not self.file_path.lower().endswith(SOURCE_EXTENSIONS):
+            QMessageBox.warning(self, "CTags Error", "CTags generation is only supported for source code files!")
+            return
+
         tag_file = f"{self.file_path}.tags"
 
-        # Check if the source file has changed
+        # Check if the source file has been modified
         current_modified = os.path.getmtime(self.file_path) if os.path.exists(self.file_path) else None
         if self.last_modified != current_modified or not self.tags_cache:
-            # If the source file has changed or cache is empty, regenerate tags
+            # Only generate tags if the file has changed or cache is empty
             if not os.path.exists(tag_file) or self.last_modified != current_modified:
                 if not self.GUI.ctags_handler.generate_ctags():
                     QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
@@ -386,14 +394,14 @@ class CodeEditor(QsciScintilla):
                 QMessageBox.warning(self, "CTags Error", "Tags file does not exist!")
                 return
 
-        # Search in cache
+        # Look up the definition in the cache
         definition = self.tags_cache.get(word)
         if definition:
             file_path, line_number = definition
             self.open_file_at_line(file_path, line_number)
         else:
             QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
-
+    
     def update_tags_cache(self, tag_file):
         """Update cache from the tags file."""
         self.tags_cache.clear()  # Clear old cache
@@ -1087,6 +1095,9 @@ class MainWindow(QMainWindow):
         self.tabWidget.tabCloseRequested.connect(self.close_file)
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
 
+        # Thêm Project View
+        self.project_view = ProjectView(self)
+
         # Install event filter for right mouse click on tabs
         self.tabWidget.tabBar().installEventFilter(self)
 
@@ -1298,6 +1309,12 @@ class MainWindow(QMainWindow):
         self.addAction(self.setPythonAction)
         self.addAction(self.setCPPAction)
 
+        # Thêm action để mở thư mục dự án
+        self.open_project_action = QAction("Open Project", self)
+        self.open_project_action.setShortcut("Ctrl+Shift+P")
+        self.open_project_action.triggered.connect(self.open_project_directory)
+        self.addAction(self.open_project_action)
+
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
         if current_editor:
@@ -1324,6 +1341,7 @@ class MainWindow(QMainWindow):
         fileMenu.addAction(self.newAction)
         fileMenu.addAction(self.openAction)
         fileMenu.addAction(self.saveAction)
+        fileMenu.addAction(self.open_project_action)
         fileMenu.addSeparator()
         fileMenu.addAction(self.reopenAction)  # Add the reopen action to the menu
         fileMenu.addAction(self.exitAction)
@@ -1350,6 +1368,12 @@ class MainWindow(QMainWindow):
         languageMenu = menubar.addMenu("Language")
         languageMenu.addAction(self.setPythonAction)
         languageMenu.addAction(self.setCPPAction)
+
+    def open_project_directory(self):
+        """Chọn thư mục dự án và cập nhật Project View."""
+        directory = QFileDialog.getExistingDirectory(self, "Select Project Directory")
+        if directory:
+            self.project_view.set_project_directory(directory)
 
     def set_editor_language(self, language):
         current_editor = self.get_current_editor()
@@ -1384,7 +1408,7 @@ class MainWindow(QMainWindow):
         self.tabWidget.setCurrentWidget(editor)  # Set the new editor as the current widget
 
     def open_file(self, file_path=None, cursor_pos=(0, 0)):
-        """Open a file in a new tab"""
+        """Open a file in a new tab, generating CTags only for source code files."""
         if not file_path:
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -1412,32 +1436,26 @@ class MainWindow(QMainWindow):
                     text = f.read()
 
                 editor = CodeEditor(self)
-                editor.textChanged.connect(self.on_editor_text_changed)  # Connect the signal
+                editor.textChanged.connect(self.on_editor_text_changed)
                 editor.setText(text)
                 editor.file_path = file_path
                 editor.setModified(False)
                 self.add_editor(editor)
 
-                # Determine the language from the file extension
-                # extension = Path(file_path).suffix.lower()
-                # if extension == '.py':
-                #     editor.set_language("Python")
-                # elif extension in ('.cpp', '.c', '.h', '.hpp'):
-                #     editor.set_language("CPP")
-                # else:
-                #     editor.set_language("CPP")
+                # Define recognized source code extensions
+                SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
 
-                # Initialize CtagsHandler for the current editor
-                self.ctags_handler = CtagsHandler(editor)
-
-                # Generate CTags for the opened file
-                self.ctags_handler.generate_ctags()
+                # Only generate CTags for source code files
+                if file_path.lower().endswith(SOURCE_EXTENSIONS):
+                    self.ctags_handler = CtagsHandler(editor)
+                    self.ctags_handler.generate_ctags()
+                    print(f"Generated CTags for source file: {file_path}")
+                else:
+                    print(f"Skipped CTags generation for non-source file: {file_path}")
 
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)
-
-                # Set horizontal scroll bar to page left
-                editor.horizontalScrollBar().setValue(0)  # Set to the leftmost position
+                editor.horizontalScrollBar().setValue(0)  # Set to leftmost position
 
                 filename = Path(file_path).name
                 index = self.tabWidget.addTab(editor, filename)
@@ -1445,7 +1463,7 @@ class MainWindow(QMainWindow):
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
-
+    
     def save_file(self):
         """Save the current file"""
         current_editor = self.get_current_editor()
@@ -1613,27 +1631,25 @@ class MainWindow(QMainWindow):
         self.find_dialog.find_input.setFocus()
 
     def load_session(self):
-        """Load previously opened files and their unsaved content"""
+        """Load previously opened files, unsaved content, and project directory."""
         try:
             if self.session_file.exists():
                 with open(self.session_file, 'r', encoding='utf-8') as f:
                     session_data = json.load(f)
 
                     # Load saved files
-                    files           = session_data.get('open_files', [])
-                    unsaved_files   = session_data.get('unsaved_files', [])
-                    current_tab     = session_data.get('current_tab', 0)
+                    files = session_data.get('open_files', [])
+                    unsaved_files = session_data.get('unsaved_files', [])
+                    current_tab = session_data.get('current_tab', 0)
 
                     # Restore saved files
                     for file_info in files:
                         if isinstance(file_info, str):
-                            # Handle old format for backward compatibility
                             file_path = file_info
                             cursor_pos = (0, 0)
                         else:
                             file_path = file_info['path']
                             cursor_pos = tuple(file_info['cursor'])
-
                         if Path(file_path).exists():
                             self.open_file(file_path, cursor_pos)
 
@@ -1644,51 +1660,46 @@ class MainWindow(QMainWindow):
                             editor.setText(f.read())
                         editor.setCursorPosition(*tuple(unsaved['cursor']))
                         editor.setModified(True)
-
-                        # Set file path if it was an existing file
                         if unsaved.get('original_path'):
                             editor.file_path = unsaved['original_path']
-
-                        # Use original tab name or generate one from backup
-                        if 'tab_name' in unsaved:
-                            tab_name = unsaved['tab_name']
-                        else:
-                            tab_name = Path(unsaved['backup_path']).stem
-
+                        tab_name = unsaved.get('tab_name', Path(unsaved['backup_path']).stem)
                         self.current_tab_index = self.tabWidget.addTab(editor, tab_name)
 
                     # Restore the last active tab
                     if self.tabWidget.count() > current_tab:
                         self.tabWidget.setCurrentIndex(current_tab)
 
-                # Delete the unsaved files in the backup folder
+                    # Load the last project directory
+                    project_dir = session_data.get('project_directory', '')
+                    if project_dir and os.path.isdir(project_dir):
+                        self.project_view.set_project_directory(project_dir)
+
+                # Clean up unsaved files in backup folder
                 for unsaved in unsaved_files:
                     if 'backup_path' in unsaved:
                         backup_file = Path(unsaved['backup_path'])
                         if backup_file.exists():
                             backup_file.unlink()
 
-                # Remove unsaved files in session file after restore
+                # Update session file after cleanup
                 with open(self.session_file, 'w', encoding='utf-8') as f:
                     session_data.pop('unsaved_files', None)
                     json.dump(session_data, f)
-
             else:
-                # Create session file if it does not exist
+                # Create an empty session file if it doesn't exist
                 with open(self.session_file, 'w', encoding='utf-8') as f:
                     json.dump({}, f)
-
         except Exception as e:
-            QMessageBox.warning(self, "Session Load Error",
-                              f"Error loading session: {str(e)}")
+            QMessageBox.warning(self, "Session Load Error", f"Error loading session: {str(e)}")
 
     def closeEvent(self, event):
-        """Handle application close event - automatically store unsaved content"""
+        """Handle application close event - save session including project directory."""
         try:
             session_data = {
                 'open_files': [],
                 'unsaved_files': [],
-                'current_tab': self.tabWidget.currentIndex()
+                'current_tab': self.tabWidget.currentIndex(),
+                'project_directory': self.project_view.get_project_directory()  # Save project directory
             }
 
             # Process each open tab
@@ -1697,49 +1708,40 @@ class MainWindow(QMainWindow):
                 cursor_pos = editor.getCursorPosition()
                 content = editor.text()
 
-                # Store information about saved files
+                # Store saved files info
                 if hasattr(editor, 'file_path') and editor.file_path and not editor.isModified():
                     session_data['open_files'].append({
                         'path': editor.file_path,
                         'cursor': cursor_pos
                     })
 
-                # Store content if the file is modified or is a new unsaved file
+                # Store unsaved or modified files
                 if editor.isModified() or not hasattr(editor, 'file_path'):
-                    if content.strip():  # Only save if there's actual content
-                        # Generate a unique backup filename
+                    if content.strip():
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         if hasattr(editor, 'file_path') and editor.file_path:
-                            # For existing files, use their name in backup
                             original_name = Path(editor.file_path).stem
                             backup_name = f"{original_name}_{timestamp}.txt"
                         else:
-                            # For new files, use 'unsaved'
                             backup_name = f"unsaved_{timestamp}_{i}.txt"
-
                         backup_path = str(self.backup_dir / backup_name)
 
-                        # Save the content to backup file
                         with open(backup_path, 'w', encoding='utf-8') as f:
                             f.write(content)
 
-                        # Store the backup information
                         session_data['unsaved_files'].append({
                             'backup_path': backup_path,
-                            # 'content': content,
                             'cursor': cursor_pos,
                             'original_path': getattr(editor, 'file_path', None),
                             'tab_name': self.tabWidget.tabText(i),
                             'timestamp': timestamp
                         })
 
-            # Save session data
+            # Save session data to file
             with open(self.session_file, 'w', encoding='utf-8') as f:
                 json.dump(session_data, f, indent=4)
-
         except Exception as e:
-            QMessageBox.warning(self, "Session Save Error",
-                              f"Error saving session: {str(e)}")
+            QMessageBox.warning(self, "Session Save Error", f"Error saving session: {str(e)}")
 
         event.accept()
 
