@@ -32,7 +32,7 @@ import chardet
 from ctags_handler import CtagsHandler
 import os
 import subprocess
-from project_view import ProjectView
+from project_view import ProjectView, FunctionList
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
@@ -183,7 +183,6 @@ class CodeEditor(QsciScintilla):
             with open(theme_path, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            # # print(f"Error loading theme: {e}")
             return None
 
     def apply_theme(self):
@@ -397,7 +396,7 @@ class CodeEditor(QsciScintilla):
 
         # Check if the current file is in a supported format
         if not self.file_path.lower().endswith(SOURCE_EXTENSIONS):
-            QMessageBox.warning(self, "CTags Error", "CTags generation is only supported for source code files!")
+            # QMessageBox.warning(self, "CTags Error", "CTags generation is only supported for source code files!")
             return
 
         # .tags file of the current file (e.g. main.c.tags)
@@ -416,84 +415,125 @@ class CodeEditor(QsciScintilla):
                     QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
                     return
 
-            # Update cache from the .tags file of the current file
-            if os.path.exists(file_tag):
-                self.update_tags_cache(file_tag)
-                self.last_modified = current_modified
-            else:
-                QMessageBox.warning(self, "CTags Error", f"Tags file '{file_tag}' does not exist!")
-                # Continue searching in project.tags even if the .tags file does not exist
+            # Tạo danh sách các file .tags cần cập nhật
+            tag_files = [file_tag]
+            if project_tag and os.path.exists(project_tag):
+                tag_files.append(project_tag)
 
-        # Search for the definition in the cache from the .tags file of the current file
+            # Cập nhật self.tags_cache với cả file_tag và project_tag
+            self.update_tags_cache(tag_files)
+            self.last_modified = current_modified
+
+        # Tìm kiếm definition trong self.tags_cache
         definition = self.tags_cache.get(word)
         if definition:
-            file_path, line_number = definition
-            self.open_file_at_line(file_path, line_number)
+            file_path, line_number, column = definition
+            self.open_file_at_line(file_path, line_number, column)
             return
 
-        # If not found in the .tags file of the current file, search in project.tags
-        if project_tag and os.path.exists(project_tag):
-            # Update cache from project.tags
-            self.update_tags_cache(project_tag)
-            # Search again in the cache
-            definition = self.tags_cache.get(word)
-            if definition:
-                file_path, line_number = definition
-                self.open_file_at_line(file_path, line_number)
+        # Nếu không tìm thấy, hiển thị thông báo lỗi
+        QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
+
+    def update_tags_cache(self, tag_files):
+        """Update cache from multiple .tags files, including column position of the symbol."""
+        self.tags_cache.clear()  # Chỉ xóa một lần trước khi cập nhật
+        for tag_file in tag_files:
+            if not os.path.exists(tag_file):
+                continue
+            try:
+                with open(tag_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("!"):  # Skip comment
+                            continue
+                        parts = line.strip().split("\t")
+                        if len(parts) < 3:
+                            continue
+                        symbol = parts[0]
+                        file_path = parts[1]
+                        line_info = parts[2]
+
+                        # Xác định tag type (nếu có)
+                        tag_type = parts[3] if len(parts) > 3 else 'unknown'
+
+                        # Process definition
+                        line_number = None
+                        column = 0
+                        if tag_type == 'd':  # Trường hợp macro (#define)
+                            # Tìm thông tin dòng từ trường "line:"
+                            for field in parts:
+                                if field.startswith("line:"):
+                                    line_number = int(field.split(":")[1])
+                                    break
+                            if line_number:
+                                # Đọc dòng từ file để tìm vị trí cột
+                                with open(file_path, "r", encoding="utf-8") as source_file:
+                                    for i, source_line in enumerate(source_file, 1):
+                                        if i == line_number:
+                                            column = source_line.find(symbol)
+                                            if column == -1:
+                                                column = 0
+                                            break
+                            else:
+                                # Nếu không có trường line:, sử dụng pattern từ line_info
+                                if line_info.startswith("/^") and line_info.endswith("$/;\""):
+                                    pattern = line_info[2:-4].strip()
+                                    with open(file_path, "r", encoding="utf-8") as source_file:
+                                        for i, source_line in enumerate(source_file, 1):
+                                            if pattern in source_line.strip():
+                                                line_number = i
+                                                column = source_line.find(symbol)
+                                                if column == -1:
+                                                    column = 0
+                                                break
+                        elif line_info.startswith("/^") and line_info.endswith("$/;\""):
+                            pattern = line_info[2:-4].strip()
+                            with open(file_path, "r", encoding="utf-8") as source_file:
+                                for i, source_line in enumerate(source_file, 1):
+                                    if pattern in source_line.strip():
+                                        line_number = i
+                                        column = source_line.find(symbol)
+                                        if column == -1:
+                                            column = 0
+                                        break
+                        elif line_info.isdigit():
+                            line_number = int(line_info)
+                            # Đọc dòng từ file để tìm vị trí cột
+                            with open(file_path, "r", encoding="utf-8") as source_file:
+                                for i, source_line in enumerate(source_file, 1):
+                                    if i == line_number:
+                                        column = source_line.find(symbol)
+                                        if column == -1:
+                                            column = 0
+                                        break
+
+                        if line_number is not None:
+                            self.tags_cache[symbol] = (file_path, line_number, column)
+            except Exception as e:
                 return
 
-        # If not found in both places, display an error message
-        QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
-    
-    def update_tags_cache(self, tag_file):
-        """Update cache from the .tags file."""
-        self.tags_cache.clear()
-        try:
-            with open(tag_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("!"):  # Skip comment
-                        continue
-                    parts = line.strip().split("\t")
-                    if len(parts) < 3:
-                        continue
-                    symbol = parts[0]
-                    file_path = parts[1]
-                    line_info = parts[2]
-
-                    # Process definition
-                    if line_info.startswith("/^") and line_info.endswith("$/;\""):
-                        pattern = line_info[2:-4].strip()
-                        with open(file_path, "r", encoding="utf-8") as source_file:
-                            for i, source_line in enumerate(source_file, 1):
-                                if pattern in source_line.strip():
-                                    self.tags_cache[symbol] = (file_path, i)
-                                    break
-                    elif line_info.isdigit():
-                        self.tags_cache[symbol] = (file_path, int(line_info))
-        except Exception as e:
-            QMessageBox.warning(self, "CTags Error", f"Error reading tags file: {str(e)}")
-            self.tags_cache.clear()
-
-    def open_file_at_line(self, file_path, line_number):
-        """Open the file and jump to the corresponding line."""
-        if os.path.exists(file_path):
-            # Kiểm tra xem file đã mở chưa
-            for i in range(self.GUI.tabWidget.count()):
-                editor = self.GUI.tabWidget.widget(i)
-                if hasattr(editor, 'file_path') and editor.file_path == file_path:
-                    self.GUI.tabWidget.setCurrentIndex(i)
-                    editor.setCursorPosition(line_number - 1, 0)
-                    editor.ensureLineVisible(line_number - 1)
-                    return
-
-            # Nếu chưa mở, mở file mới
-            self.GUI.open_file(file_path)
-            editor = self.GUI.get_current_editor()
-            if editor:
-                editor.setCursorPosition(line_number - 1, 0)
-                editor.ensureLineVisible(line_number - 1)
-        else:
+    def open_file_at_line(self, file_path, line_number, column=0):
+        """Open the file and jump to the corresponding line and column. Return True if successful."""
+        if not os.path.exists(file_path):
             QMessageBox.warning(self, "CTags", f"File '{file_path}' does not exist.")
+            return False
+
+        # Kiểm tra xem file đã mở chưa
+        for i in range(self.GUI.tabWidget.count()):
+            editor = self.GUI.tabWidget.widget(i)
+            if hasattr(editor, 'file_path') and editor.file_path == file_path:
+                self.GUI.tabWidget.setCurrentIndex(i)
+                editor.setCursorPosition(line_number - 1, column)  # Sửa: Đặt con trỏ tại cột chính xác
+                editor.ensureLineVisible(line_number - 1)
+                return True
+
+        # Nếu chưa mở, mở file mới
+        editor = self.GUI.open_file(file_path)
+        if editor:
+            editor.setCursorPosition(line_number - 1, column)  # Sửa: Đặt con trỏ tại cột chính xác
+            editor.ensureLineVisible(line_number - 1)
+            return True
+        else:
+            return False
 
     def set_language(self, language):
         if language == "Python":
@@ -1132,11 +1172,18 @@ class MainWindow(QMainWindow):
         # Initialize Tab File Manager
         self.current_tab_index = -1
 
+        # Add Function List
+        self.function_list = FunctionList(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.function_list)
+
         # Initialize TabWidget with custom styling
         self.tabWidget = QTabWidget()
         self.tabWidget.setTabsClosable(True)
         self.tabWidget.tabCloseRequested.connect(self.close_file)
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
+
+        # Update Function List when switching tabs
+        self.tabWidget.currentChanged.connect(self.update_function_list)
 
         # Thêm Project View
         self.project_view = ProjectView(self)
@@ -1502,6 +1549,9 @@ class MainWindow(QMainWindow):
                 filename = Path(file_path).name
                 index = self.tabWidget.addTab(editor, filename)
                 self.tabWidget.setCurrentIndex(index)
+                
+                # Update Function List after opening a file
+                self.update_function_list()
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
@@ -1522,7 +1572,6 @@ class MainWindow(QMainWindow):
         try:
             with open(current_editor.file_path, 'w', encoding='utf-8') as f:
                 f.write(current_editor.text())
-                # # print(f"File saved: {current_editor.file_path}")  # Debugging line
 
             # Mark the editor as not modified
             current_editor.setModified(False)
@@ -2083,6 +2132,52 @@ class MainWindow(QMainWindow):
     def enable_folding(editor: QsciScintilla):
         editor.setMarginWidth(2, 15)  # Đặt chiều rộng margin thứ 2 (chứa folding)
         editor.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)  # Kiểu hiển thị folding
+    
+    """ Function List Item Handle Functions """
+    def update_function_list(self):
+        """Update Function List when switching tabs or opening a file."""
+        current_editor = self.get_current_editor()
+        self.function_list.update_function_list(current_editor)
+
+    def on_item_double_clicked(self, item, column):
+        """Nhảy đến định nghĩa và đặt con trỏ tại vị trí symbol khi nhấp đúp vào item."""
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data:
+            file_path, line_info = data
+            editor = self.parent.get_current_editor()
+            if editor:
+                # Tính lại line_number và tìm vị trí cột của symbol từ line_info
+                line_number = None
+                column = 0  # Vị trí cột của symbol trong dòng
+                symbol = item.text(0)  # Lấy tên symbol từ item (cột Symbol)
+
+                if line_info.startswith("/^") and line_info.endswith("$/;\""):
+                    pattern = line_info[2:-4].strip()
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as source_file:
+                            for i, source_line in enumerate(source_file, 1):
+                                if pattern in source_line.strip():
+                                    line_number = i
+                                    # Tìm vị trí cột của symbol trong dòng
+                                    column = source_line.find(symbol)
+                                    break
+                    except Exception as e:
+                        return
+                elif line_info.isdigit():
+                    line_number = int(line_info)
+                    # Đọc dòng từ file để tìm vị trí cột của symbol
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as source_file:
+                            for i, source_line in enumerate(source_file, 1):
+                                if i == line_number:
+                                    column = source_line.find(symbol)
+                                    break
+                    except Exception as e:
+                        return
+
+                if line_number is not None:
+                    # Mở file và đặt con trỏ tại vị trí symbol
+                    editor.open_file_at_line(file_path, line_number, column)
 
 def main():
     app = QApplication(sys.argv)

@@ -1,4 +1,3 @@
-
 import subprocess
 import os, shutil
 from PyQt6.QtWidgets import QMessageBox
@@ -7,6 +6,7 @@ class CtagsHandler:
     def __init__(self, editor):
         self.editor = editor  # Reference to the editor instance
 
+    @staticmethod
     def is_ctags_available():
         try:
             subprocess.run(['ctags', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
@@ -15,15 +15,15 @@ class CtagsHandler:
             return False
 
     def generate_ctags(self):
-        if not hasattr(self.editor, 'file_path') or not os.path.isfile(self.editor.file_path):
+        """Generate CTags for the current file, only for supported source files."""
+        if not self.editor.file_path:
             return False
+
+        # Create a .tags file name based on file_path
+        tags_file = f"{self.editor.file_path}.tags"  # Example: Queue.c.tags
         try:
-            tags_file_path = f"{self.editor.file_path}.tags"
-            ctags_path = shutil.which("ctags") or r".\ctags\ctags.exe"  # Tìm trong PATH trước
-            if not os.path.exists(ctags_path):
-                QMessageBox.warning(self.editor.parent(), "CTags Error", "CTags executable not found!")
-                return False
-            ctags_cmd = [ctags_path, "--fields=+n", "-f", tags_file_path, self.editor.file_path]
+            # Command to generate CTags for the current file
+            ctags_cmd = [r".\ctags\ctags.exe", "--fields=+n", "--kinds-C=+d", "-o", tags_file, self.editor.file_path]
             result = subprocess.run(ctags_cmd, capture_output=True, text=True, shell=True)
             if result.returncode == 0:
                 return True

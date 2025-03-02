@@ -1,9 +1,10 @@
 # project_view.py
-from PyQt6.QtWidgets import QTreeView, QDockWidget, QHeaderView
+from PyQt6.QtWidgets import QTreeView, QDockWidget, QHeaderView, QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem
 from PyQt6.QtGui import QFileSystemModel
 from PyQt6.QtCore import QDir, Qt
 import os
 import subprocess
+from pathlib import Path
 
 class ProjectView:
     def __init__(self, parent):
@@ -53,7 +54,6 @@ class ProjectView:
             # Set the column header to the folder name
             folder_name = os.path.basename(directory)  # Get the folder name from the directory path
             self.project_model.setHeaderData(0, Qt.Orientation.Horizontal, folder_name)  # Update the first column header
-            # # print(f"Set column header to folder name: {folder_name}")
             
             # Generate CTags for the project
             self.generate_project_ctags(directory)
@@ -66,7 +66,6 @@ class ProjectView:
         file_path = self.project_model.filePath(index)
         if os.path.isfile(file_path):
             self.parent.open_file(file_path)  # Call open_file from MainWindow
-            # print(f"Opened file from Project View: {file_path}")
 
     def get_project_directory(self):
         """Get the current project directory."""
@@ -76,8 +75,8 @@ class ProjectView:
         """Generate a single CTags file for the entire project."""
         tags_file = os.path.join(directory, "project.tags")
         try:
-            # Command to generate CTags recursively for the project
-            ctags_cmd = [r".\ctags\ctags.exe", "--fields=+n", "-R", "-f", tags_file, directory]
+            # Command to generate CTags recursively for the project, including macros
+            ctags_cmd = [r".\ctags\ctags.exe", "--fields=+n", "--kinds-C=+d", "-R", "-f", tags_file, directory]
             result = subprocess.run(ctags_cmd, capture_output=True, text=True, shell=True)
             if result.returncode == 0:
                 return True
@@ -94,3 +93,149 @@ class ProjectView:
             return True
         else:
             return False
+
+class FunctionList(QDockWidget):
+    def __init__(self, parent=None):
+        super().__init__("Function List", parent)
+        self.parent = parent
+        self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
+
+        # Main widget for Function List
+        self.main_widget = QWidget()
+        self.layout = QVBoxLayout(self.main_widget)
+
+        # TreeWidget to display the list of functions/variables
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Symbol", "Type"])
+        self.tree.setColumnWidth(0, 200)  # Symbol column wider
+        self.tree.setColumnWidth(1, 100)  # Type column narrower
+        self.tree.itemDoubleClicked.connect(self.on_item_double_clicked)
+        self.layout.addWidget(self.tree)
+
+        self.setWidget(self.main_widget)
+
+    def update_function_list(self, editor):
+        """Update the list of functions and variables based on the self.tags_cache of the current editor."""
+        self.tree.clear()  # Clear the old list
+
+        if not editor or not hasattr(editor, 'file_path') or not editor.file_path:
+            return
+
+        # Ensure tags_cache has been updated
+        if not hasattr(editor, 'tags_cache') or not editor.tags_cache:
+            file_tag = f"{editor.file_path}.tags"
+            if not os.path.exists(file_tag):
+                self.parent.statusBar().showMessage(f"Tags file not found: {file_tag}")
+                return
+
+            project_dir = self.parent.project_view.get_project_directory() if self.parent.project_view else None
+            project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
+            tag_files = [file_tag]
+            if project_tag and os.path.exists(project_tag):
+                tag_files.append(project_tag)
+
+            editor.update_tags_cache(tag_files)
+
+        # Use tags_cache from editor
+        try:
+            # Only display 2 columns: Symbol and Type
+            self.tree.setHeaderLabels(["Symbol", "Type"])
+            self.tree.setColumnWidth(0, 200)  # Symbol column wider
+            self.tree.setColumnWidth(1, 100)  # Type column narrower
+
+            functions = QTreeWidgetItem(self.tree, ["Functions"])
+            self.tree.addTopLevelItem(functions)
+            variables = QTreeWidgetItem(self.tree, ["Variables"])
+            self.tree.addTopLevelItem(variables)
+
+            # Classify functions and variables from tags_cache
+            for symbol, (file_path, line_number, column) in editor.tags_cache.items():
+                tag_type = None
+                # Read the .tags file to get tag_type
+                with open(f"{editor.file_path}.tags", 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.startswith("!"):
+                            continue
+                        parts = line.strip().split("\t")
+                        if len(parts) < 4 or parts[0] != symbol:
+                            continue
+                        tag_type = parts[3] if len(parts) > 3 else 'unknown'
+                        break
+
+                if tag_type == 'f':  # Function
+                    item = QTreeWidgetItem(functions)  # Create a new item for each function
+                    item.setText(0, symbol)  # Symbol
+                    item.setText(1, "Function")  # Type
+                    item.setData(0, Qt.ItemDataRole.UserRole, (file_path, line_number, column))
+                    functions.addChild(item)
+                elif tag_type == 'v':  # Variable
+                    item = QTreeWidgetItem(variables)  # Create a new item for each variable
+                    item.setText(0, symbol)  # Symbol
+                    item.setText(1, "Variable")  # Type
+                    item.setData(0, Qt.ItemDataRole.UserRole, (file_path, line_number, column))
+                    variables.addChild(item)
+
+            # Expand the Functions and Variables sections to display child items
+            functions.setExpanded(True)
+            variables.setExpanded(True)
+
+            # Ensure the QTreeWidget is updated
+            self.tree.repaint()
+        except Exception as e:
+            return
+
+    def on_item_double_clicked(self, item, column):
+        """Jump to the definition and set the cursor at the symbol position when double-clicked on an item."""
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data:
+            file_path, line_number, column = data  # Directly get line_number and column from cache
+            editor = self.parent.get_current_editor()
+            if editor:
+                if line_number is not None:
+                    # Open the file and set the cursor at the symbol position
+                    success = editor.open_file_at_line(file_path, line_number, column)
+                    if not success:
+                        self.parent.statusBar().showMessage(f"Failed to jump to definition in {file_path}")
+                else:
+                    self.parent.statusBar().showMessage(f"Could not find definition in {file_path}")
+
+    # def on_item_double_clicked(self, item, column):
+    #     """Jump to the definition and set the cursor at the symbol position when double-clicked on an item."""
+    #     data = item.data(0, Qt.ItemDataRole.UserRole)
+    #     if data:
+    #         file_path, line_info = data
+    #         editor = self.parent.get_current_editor()
+    #         if editor:
+    #             # Recalculate line_number and find the column position of the symbol from line_info
+    #             line_number = None
+    #             column = 0  # Column position of the symbol within the line
+    #             symbol = item.text(0)  # Get the symbol name from the item (Symbol column)
+
+    #             if line_info.startswith("/^") and line_info.endswith("$/;\""):
+    #                 pattern = line_info[2:-4].strip()
+    #                 try:
+    #                     with open(file_path, 'r', encoding='utf-8') as source_file:
+    #                         for i, source_line in enumerate(source_file, 1):
+    #                             if pattern in source_line.strip():
+    #                                 line_number = i
+    #                                 # Find the column position of the symbol within the line
+    #                                 line_content = source_line
+    #                                 column = line_content.find(symbol)  # Find the starting position of the symbol
+    #                                 break
+    #                 except Exception as e:
+    #                     self.parent.statusBar().showMessage(f"Error reading file {file_path}: {str(e)}")
+    #             elif line_info.isdigit():
+    #                 line_number = int(line_info)
+    #                 # Read the line from the file to find the column position of the symbol
+    #                 try:
+    #                     with open(file_path, 'r', encoding='utf-8') as source_file:
+    #                         for i, source_line in enumerate(source_file, 1):
+    #                             if i == line_number:
+    #                                 column = source_line.find(symbol)  # Find the starting position of the symbol
+    #                                 break
+    #                 except Exception as e:
+    #                     return
+
+    #             if line_number is not None:
+    #                 # Open the file and set the cursor at the symbol position
+    #                 editor.open_file_at_line(file_path, line_number, column)
