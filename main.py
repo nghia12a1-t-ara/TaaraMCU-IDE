@@ -1353,10 +1353,10 @@ class MainWindow(QMainWindow):
         self.addAction(self.setCPPAction)
 
         # Thêm action để mở thư mục dự án
-        self.open_project_action = QAction("Open Project", self)
-        self.open_project_action.setShortcut("Ctrl+Shift+P")
-        self.open_project_action.triggered.connect(self.open_project_directory)
-        self.addAction(self.open_project_action)
+        self.openprojectAction = QAction("Open Project", self)
+        self.openprojectAction.setShortcut("Ctrl+Shift+P")
+        self.openprojectAction.triggered.connect(self.open_project_directory)
+        self.addAction(self.openprojectAction)
 
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
@@ -1384,7 +1384,7 @@ class MainWindow(QMainWindow):
         fileMenu.addAction(self.newAction)
         fileMenu.addAction(self.openAction)
         fileMenu.addAction(self.saveAction)
-        fileMenu.addAction(self.open_project_action)
+        fileMenu.addAction(self.openprojectAction)
         fileMenu.addSeparator()
         fileMenu.addAction(self.reopenAction)  # Add the reopen action to the menu
         fileMenu.addAction(self.exitAction)
@@ -1431,6 +1431,7 @@ class MainWindow(QMainWindow):
         # Add icons to actions
         self.newAction.setIcon(QIcon("icons/new.svg"))
         self.openAction.setIcon(QIcon("icons/open.svg"))
+        self.openprojectAction.setIcon(QIcon("icons/open_proj.svg"))
         self.saveAction.setIcon(QIcon("icons/save.svg"))
         self.wordWrapAction.setIcon(QIcon("icons/word-wrap.svg"))
         self.ShowAllCharAction.setIcon(QIcon("icons/show_all_char.svg"))
@@ -1438,6 +1439,7 @@ class MainWindow(QMainWindow):
         # Add actions to toolbar
         toolbar.addAction(self.newAction)
         toolbar.addAction(self.openAction)
+        toolbar.addAction(self.openprojectAction)
         toolbar.addAction(self.saveAction)
         toolbar.addAction(self.wordWrapAction)
         toolbar.addAction(self.ShowAllCharAction)
@@ -1562,6 +1564,10 @@ class MainWindow(QMainWindow):
         if hasattr(editor, 'file_path'):
             self.closed_files.append((editor.file_path, editor.text(), editor.getCursorPosition()))
 
+        # Remove ctags file
+        self.ctags_handler = CtagsHandler(editor)
+        self.ctags_handler.remove_ctags()
+
         # Remove the tab
         self.tabWidget.removeTab(index)
 
@@ -1684,26 +1690,27 @@ class MainWindow(QMainWindow):
 
                     # Restore saved files
                     for file_info in files:
-                        if isinstance(file_info, str):
-                            file_path = file_info
-                            cursor_pos = (0, 0)
-                        else:
-                            file_path = file_info['path']
-                            cursor_pos = tuple(file_info['cursor'])
+                        file_path = file_info['path']
+                        cursor_pos = tuple(file_info['cursor'])
                         if Path(file_path).exists():
                             self.open_file(file_path, cursor_pos)
 
-                    # Restore unsaved files
+                    # Restore and open unsaved files from backups
                     for unsaved in unsaved_files:
-                        editor = CodeEditor(self)
-                        with open(unsaved['backup_path'], 'r', encoding='utf-8') as f:
-                            editor.setText(f.read())
-                        editor.setCursorPosition(*tuple(unsaved['cursor']))
-                        editor.setModified(True)
-                        if unsaved.get('original_path'):
-                            editor.file_path = unsaved['original_path']
-                        tab_name = unsaved.get('tab_name', Path(unsaved['backup_path']).stem)
-                        self.current_tab_index = self.tabWidget.addTab(editor, tab_name)
+                        backup_path = unsaved['backup_path']
+                        if Path(backup_path).exists():
+                            # Mở file backup
+                            editor = self.open_file(backup_path, tuple(unsaved['cursor']))
+                            # Đảm bảo trạng thái là "unsaved"
+                            if editor:
+                                editor.setModified(True)
+                        else:
+                            # Nếu file backup không tồn tại, tạo editor mới với nội dung trống
+                            editor = CodeEditor(self)
+                            editor.setCursorPosition(*tuple(unsaved['cursor']))
+                            editor.setModified(True)
+                            tab_name = unsaved.get('tab_name', Path(backup_path).stem)
+                            self.tabWidget.addTab(editor, tab_name)
 
                     # Restore the last active tab
                     if self.tabWidget.count() > current_tab:
@@ -1714,17 +1721,6 @@ class MainWindow(QMainWindow):
                     if project_dir and os.path.isdir(project_dir):
                         self.project_view.set_project_directory(project_dir)
 
-                # Clean up unsaved files in backup folder
-                for unsaved in unsaved_files:
-                    if 'backup_path' in unsaved:
-                        backup_file = Path(unsaved['backup_path'])
-                        if backup_file.exists():
-                            backup_file.unlink()
-
-                # Update session file after cleanup
-                with open(self.session_file, 'w', encoding='utf-8') as f:
-                    session_data.pop('unsaved_files', None)
-                    json.dump(session_data, f)
             else:
                 # Create an empty session file if it doesn't exist
                 with open(self.session_file, 'w', encoding='utf-8') as f:
@@ -1732,30 +1728,88 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Session Load Error", f"Error loading session: {str(e)}")
 
+    def save_file_for_editor(self, editor):
+        """Save the specified editor's content"""
+        if not hasattr(editor, 'file_path') or not editor.file_path:
+            file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "All Files (*.*)")
+            if file_path:
+                editor.file_path = file_path
+            else:
+                return False  # Người dùng hủy lưu
+
+        try:
+            with open(editor.file_path, 'w', encoding='utf-8') as f:
+                f.write(editor.text())
+            editor.setModified(False)
+            # Cập nhật tên tab
+            tab_index = self.tabWidget.indexOf(editor)
+            if tab_index != -1:
+                self.tabWidget.setTabText(tab_index, Path(editor.file_path).name)
+                self.set_tab_background_color(tab_index, "saved")
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not save file: {str(e)}")
+            return False
+
     def closeEvent(self, event):
-        """Handle application close event - save session including project directory."""
+        """Handle application close event - save session with confirmation for saved files."""
+        modified_saved_files = []  # Các file đã có sẵn và bị chỉnh sửa
+
+        # Kiểm tra từng tab để phân loại
+        for i in range(self.tabWidget.count()):
+            editor = self.tabWidget.widget(i)
+            if editor.isModified() and hasattr(editor, 'file_path') and editor.file_path:
+                if editor.text().strip():  # Chỉ xử lý nếu có nội dung
+                    modified_saved_files.append((i, editor, self.tabWidget.tabText(i)))
+
+        # Hỏi người dùng với các file đã có sẵn và bị chỉnh sửa
+        if modified_saved_files:
+            tabs_to_remove = []  # Danh sách các tab sẽ bị xóa nếu chọn Discard
+            for index, editor, filename in modified_saved_files:
+                reply = QMessageBox.question(
+                    self,
+                    "Save Changes",
+                    f"Do you want to save changes to {filename}?",
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                )
+
+                if reply == QMessageBox.StandardButton.Save:
+                    if not self.save_file_for_editor(editor):
+                        event.ignore()  # Hủy đóng ứng dụng nếu lưu thất bại hoặc bị hủy
+                        return
+                elif reply == QMessageBox.StandardButton.Discard:
+                    # Đánh dấu tab để xóa và xóa file backup nếu có
+                    tabs_to_remove.append(index)
+                    if Path(editor.file_path).exists() and str(self.backup_dir) in editor.file_path:
+                        Path(editor.file_path).unlink()  # Xóa file backup nếu là backup
+
+            # Xóa các tab đã chọn Discard
+            for index in sorted(tabs_to_remove, reverse=True):  # Xóa từ cuối để tránh lỗi chỉ số
+                self.tabWidget.removeTab(index)
+
+        # Lưu session sau khi xử lý tất cả tab
         try:
             session_data = {
                 'open_files': [],
                 'unsaved_files': [],
                 'current_tab': self.tabWidget.currentIndex(),
-                'project_directory': self.project_view.get_project_directory()  # Save project directory
+                'project_directory': self.project_view.get_project_directory()
             }
 
-            # Process each open tab
+            # Process each remaining open tab
             for i in range(self.tabWidget.count()):
                 editor = self.tabWidget.widget(i)
                 cursor_pos = editor.getCursorPosition()
                 content = editor.text()
 
-                # Store saved files info
+                # Store saved files info (file đã có sẵn và không bị chỉnh sửa)
                 if hasattr(editor, 'file_path') and editor.file_path and not editor.isModified():
                     session_data['open_files'].append({
                         'path': editor.file_path,
                         'cursor': cursor_pos
                     })
 
-                # Store unsaved or modified files
+                # Store unsaved files (file chưa lưu bao giờ hoặc file đã chỉnh sửa còn lại)
                 if editor.isModified() or not hasattr(editor, 'file_path'):
                     if content.strip():
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1780,10 +1834,11 @@ class MainWindow(QMainWindow):
             # Save session data to file
             with open(self.session_file, 'w', encoding='utf-8') as f:
                 json.dump(session_data, f, indent=4)
+
         except Exception as e:
             QMessageBox.warning(self, "Session Save Error", f"Error saving session: {str(e)}")
 
-        event.accept()
+        event.accept()  # Chấp nhận đóng ứng dụng sau khi xử lý
 
     def eventFilter(self, obj, event):
         """Handle right mouse click on tabs and middle mouse button click to close tabs"""

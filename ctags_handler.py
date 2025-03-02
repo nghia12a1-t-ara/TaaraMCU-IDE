@@ -28,11 +28,16 @@ class CtagsHandler:
             if result.returncode == 0:
                 return True
             else:
-                QMessageBox.warning(self.editor.parent(), "CTags Error", f"CTags failed: {result.stderr}")
                 return False
         except Exception as e:
-            QMessageBox.warning(self.editor.parent(), "CTags Error", f"Could not generate CTags: {str(e)}")
             return False
+        
+    def remove_ctags(self):
+        """Remove the .tags file associated with the current editor's file."""
+        if hasattr(self.editor, 'file_path'):
+            tags_file_path = f"{self.editor.file_path}.tags"
+            if os.path.exists(tags_file_path):
+                os.remove(tags_file_path)
         
     def update_ctags(self):
         """Update CTags for the current editor's file."""

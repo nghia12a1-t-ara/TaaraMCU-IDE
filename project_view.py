@@ -8,6 +8,7 @@ import subprocess
 class ProjectView:
     def __init__(self, parent):
         self.parent = parent  # MainWindow will be the parent
+        self.current_project_directory = None  # Keep track of the current project directory
 
         # Create dock widget for Project View
         self.project_dock = QDockWidget("Project View", parent)
@@ -38,6 +39,10 @@ class ProjectView:
     def set_project_directory(self, directory):
         """Update project directory for Project View, set column header to folder name, and generate CTags."""
         if directory and os.path.isdir(directory):
+            # Remove the project.tags file from the previous project directory
+            if self.current_project_directory:
+                self.remove_project_ctags(self.current_project_directory)
+            
             # Set the root path and update the view
             self.project_model.setRootPath(directory)
             self.project_tree.setRootIndex(self.project_model.index(directory))
@@ -52,6 +57,9 @@ class ProjectView:
             
             # Generate CTags for the project
             self.generate_project_ctags(directory)
+            
+            # Update the current project directory
+            self.current_project_directory = directory
 
     def open_file_from_project(self, index):
         """Open file when double-clicked in Project View."""
@@ -78,3 +86,11 @@ class ProjectView:
         except Exception as e:
             return False
         
+    def remove_project_ctags(self, directory):
+        tags_file = os.path.join(directory, "project.tags")
+
+        if os.path.exists(tags_file):
+            os.remove(tags_file)
+            return True
+        else:
+            return False

@@ -1,5 +1,13 @@
 {
-    "open_files": [],
+    "open_files": [
+        {
+            "path": "D:/Git_Repository/DataStructure_Algorithm_in_C/DS_Single_LinkedList/Linked_List.c",
+            "cursor": [
+                1,
+                0
+            ]
+        }
+    ],
     "unsaved_files": [],
     "current_tab": 0,
     "project_directory": "D:/Git_Repository/DataStructure_Algorithm_in_C"
