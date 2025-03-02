@@ -1,35 +1,6 @@
 {
-    "open_files": [
-        {
-            "path": "C:/Users/ADMIN/Desktop/Debugger_Tools/Taara_Debugger/main.py",
-            "cursor": [
-                355,
-                0
-            ]
-        },
-        {
-            "path": "D:/Git_Repository/ARM_Software_Test/HeapTest.c",
-            "cursor": [
-                14,
-                21
-            ]
-        },
-        {
-            "path": "D:/Git_Repository/ARM_Software_Test/CMSIS-DSP-Example/SIMD_Test.c",
-            "cursor": [
-                26,
-                26
-            ]
-        },
-        {
-            "path": "D:/Git_Repository/ARM_Software_Test/project.tags",
-            "cursor": [
-                1835,
-                112
-            ]
-        }
-    ],
+    "open_files": [],
     "unsaved_files": [],
-    "current_tab": 3,
-    "project_directory": "D:/Git_Repository/ARM_Software_Test"
+    "current_tab": 0,
+    "project_directory": "D:/Git_Repository/DataStructure_Algorithm_in_C"
 }

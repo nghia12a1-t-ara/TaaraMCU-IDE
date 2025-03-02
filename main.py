@@ -386,51 +386,72 @@ class CodeEditor(QsciScintilla):
         super().mousePressEvent(event)
 
     def gotoDefinition(self, word):
-        """Find the keyword definition using cached tags if available, only for source files."""
+        """Find the keyword definition in .tags files, first in current file, then in project."""
+        # Check if the current file exists
         if not hasattr(self, 'file_path') or not self.file_path:
             QMessageBox.warning(self, "CTags Error", "No file path available for this editor!")
             return
 
-        # Define recognized source code extensions
-        SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
-        
-        # Check if the current file is a source file
+        # Define the supported source file formats
+        SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')
+
+        # Check if the current file is in a supported format
         if not self.file_path.lower().endswith(SOURCE_EXTENSIONS):
             QMessageBox.warning(self, "CTags Error", "CTags generation is only supported for source code files!")
             return
 
-        tag_file = f"{self.file_path}.tags"
+        # .tags file of the current file (e.g. main.c.tags)
+        file_tag = f"{self.file_path}.tags"
 
-        # Check if the source file has been modified
+        # project.tags file of the project directory
+        project_dir = self.GUI.project_view.get_project_directory() if self.GUI.project_view else None
+        project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
+
+        # Check if the current file has been modified
         current_modified = os.path.getmtime(self.file_path) if os.path.exists(self.file_path) else None
         if self.last_modified != current_modified or not self.tags_cache:
-            # Only generate tags if the file has changed or cache is empty
-            if not os.path.exists(tag_file) or self.last_modified != current_modified:
+            # Only regenerate tags if the file has changed or the cache is empty
+            if not os.path.exists(file_tag) or self.last_modified != current_modified:
                 if not self.GUI.ctags_handler.generate_ctags():
                     QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
                     return
-            if os.path.exists(tag_file):
-                self.update_tags_cache(tag_file)
+
+            # Update cache from the .tags file of the current file
+            if os.path.exists(file_tag):
+                self.update_tags_cache(file_tag)
                 self.last_modified = current_modified
             else:
-                QMessageBox.warning(self, "CTags Error", "Tags file does not exist!")
-                return
+                QMessageBox.warning(self, "CTags Error", f"Tags file '{file_tag}' does not exist!")
+                # Continue searching in project.tags even if the .tags file does not exist
 
-        # Look up the definition in the cache
+        # Search for the definition in the cache from the .tags file of the current file
         definition = self.tags_cache.get(word)
         if definition:
             file_path, line_number = definition
             self.open_file_at_line(file_path, line_number)
-        else:
-            QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
+            return
+
+        # If not found in the .tags file of the current file, search in project.tags
+        if project_tag and os.path.exists(project_tag):
+            # Update cache from project.tags
+            self.update_tags_cache(project_tag)
+            # Search again in the cache
+            definition = self.tags_cache.get(word)
+            if definition:
+                file_path, line_number = definition
+                self.open_file_at_line(file_path, line_number)
+                return
+
+        # If not found in both places, display an error message
+        QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
     
     def update_tags_cache(self, tag_file):
-        """Update cache from the tags file."""
-        self.tags_cache.clear()  # Clear old cache
+        """Update cache from the .tags file."""
+        self.tags_cache.clear()
         try:
             with open(tag_file, "r", encoding="utf-8") as f:
                 for line in f:
-                    if line.startswith("!"):  # Skip comments
+                    if line.startswith("!"):  # Skip comment
                         continue
                     parts = line.strip().split("\t")
                     if len(parts) < 3:
@@ -439,7 +460,7 @@ class CodeEditor(QsciScintilla):
                     file_path = parts[1]
                     line_info = parts[2]
 
-                    # Handle pattern or line number
+                    # Process definition
                     if line_info.startswith("/^") and line_info.endswith("$/;\""):
                         pattern = line_info[2:-4].strip()
                         with open(file_path, "r", encoding="utf-8") as source_file:
@@ -451,7 +472,7 @@ class CodeEditor(QsciScintilla):
                         self.tags_cache[symbol] = (file_path, int(line_info))
         except Exception as e:
             QMessageBox.warning(self, "CTags Error", f"Error reading tags file: {str(e)}")
-            self.tags_cache.clear()  # Clear cache if error occurs
+            self.tags_cache.clear()
 
     def open_file_at_line(self, file_path, line_number):
         """Open the file and jump to the corresponding line."""
