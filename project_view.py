@@ -37,6 +37,13 @@ class ProjectView:
         self.project_dock.setWidget(self.project_tree)
         parent.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
 
+        self.project_dock.visibilityChanged.connect(self.on_project_view_visibility_changed)
+
+    def on_project_view_visibility_changed(self, visible):
+        """Xử lý khi Project View bị ẩn/hiển thị (bao gồm nhấp nút 'X')."""
+        if hasattr(self.parent, 'projectviewAction'):
+            self.parent.projectviewAction.setChecked(visible)
+
     def set_project_directory(self, directory):
         """Update project directory for Project View, set column header to folder name, and generate CTags."""
         if directory and os.path.isdir(directory):
@@ -113,6 +120,12 @@ class FunctionList(QDockWidget):
         self.layout.addWidget(self.tree)
 
         self.setWidget(self.main_widget)
+        self.visibilityChanged.connect(self.on_function_list_visibility_changed)
+
+    def on_function_list_visibility_changed(self, visible):
+        """Xử lý khi Function List bị ẩn/hiển thị (bao gồm nhấp nút 'X')."""
+        if hasattr(self.parent, 'functionlistAction'):
+            self.parent.functionlistAction.setChecked(visible)
 
     def update_function_list(self, editor):
         """Update the list of functions and variables based on the self.tags_cache of the current editor."""

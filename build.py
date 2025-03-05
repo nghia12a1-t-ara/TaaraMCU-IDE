@@ -75,8 +75,9 @@ def build_exe():
         '--noconsole',          # Do not display a console when running
         '--noupx',              # Do not use UPX to compress
         '-F',                   # Similar to --onefile
-        '-n', 'Taara_Notepad++.exe',        # Name of the output exe file
+        '-n', 'Taara_IDE.exe',        # Name of the output exe file
         '--icon', 'icons/logoIcon.ico',    # Full path to the icon
+        '--uac-admin',
         '--distpath', '.',      # Output directory
     ]
     

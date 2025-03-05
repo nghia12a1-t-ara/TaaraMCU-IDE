@@ -1405,6 +1405,17 @@ class MainWindow(QMainWindow):
         self.openprojectAction.triggered.connect(self.open_project_directory)
         self.addAction(self.openprojectAction)
 
+        # Create actions for project view and function list
+        self.projectviewAction = QAction(QIcon("icons/project.svg"), "Project Explore", self)
+        self.projectviewAction.setCheckable(True)
+        self.projectviewAction.setChecked(True)
+        self.projectviewAction.toggled.connect(self.toggle_project_view)
+
+        self.functionlistAction = QAction(QIcon("icons/function_list.svg"), "Function List", self)
+        self.functionlistAction.setCheckable(True)
+        self.functionlistAction.setChecked(True)
+        self.functionlistAction.toggled.connect(self.toggle_function_list)
+
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
         if current_editor:
@@ -1459,6 +1470,14 @@ class MainWindow(QMainWindow):
         languageMenu.addAction(self.setPythonAction)
         languageMenu.addAction(self.setCPPAction)
 
+        # Add Window Toolbar
+        windowMenu = menubar.addMenu("Window")
+        show_view_menu = QMenu("Show View", self)
+        windowMenu.addMenu(show_view_menu)
+        show_view_menu.addAction(self.projectviewAction)
+        show_view_menu.addAction(self.functionlistAction)
+        
+
     def open_project_directory(self):
         """Chọn thư mục dự án và cập nhật Project View."""
         directory = QFileDialog.getExistingDirectory(self, "Select Project Directory")
@@ -1469,6 +1488,14 @@ class MainWindow(QMainWindow):
         current_editor = self.get_current_editor()
         if current_editor:
             current_editor.set_language(language)
+
+    def toggle_project_view(self, checked):
+        """Toggle visibility of Project View."""
+        self.project_view.project_dock.setVisible(checked)
+
+    def toggle_function_list(self, checked):
+        """Toggle visibility of Function List."""
+        self.function_list.setVisible(checked)
 
     def create_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
@@ -1490,6 +1517,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.saveAction)
         toolbar.addAction(self.wordWrapAction)
         toolbar.addAction(self.ShowAllCharAction)
+        toolbar.addAction(self.functionlistAction)
 
     def new_file(self):
         """Create a new empty file"""
