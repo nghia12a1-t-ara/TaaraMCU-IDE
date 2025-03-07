@@ -4,7 +4,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget,
     QFileDialog, QMessageBox, QToolBar,
-    QMenuBar, QDialog, QLabel, QLineEdit,
+    QDialog, QLabel, QLineEdit,
     QVBoxLayout, QHBoxLayout, QPushButton,
     QCheckBox, QGroupBox, QRadioButton,
     QWidget, QMenu, QStatusBar
@@ -18,8 +18,6 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import (
     Qt,
-    QPoint,
-    QSize,
     QTimer
 )
 from PyQt6.Qsci import (
@@ -33,6 +31,7 @@ from ctags_handler import CtagsHandler
 import os
 import subprocess
 from project_view import ProjectView, FunctionList
+from Terminal import Console
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
@@ -1255,6 +1254,11 @@ class MainWindow(QMainWindow):
 
         # Connect the cursor position change to update the status bar
         self.tabWidget.currentChanged.connect(self.update_status_bar)
+
+        # Tạo Console
+        self.console = Console(self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.console)
+        # self.console.add_log("Info", "Application started successfully")
 
     def set_tab_style(self):
         """Set the style for tabs"""
