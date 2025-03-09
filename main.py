@@ -30,7 +30,7 @@ from ctags_handler import CtagsHandler
 import os
 import subprocess
 from project_view import ProjectView, FunctionList
-from Terminal import Console
+from Terminal import Terminal
 from settings_manager import SettingsManager
 
 class CodeEditor(QsciScintilla):
@@ -291,75 +291,75 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(QsciScintilla.SCI_REPLACETARGET, len(new_text_bytes), new_text_bytes)
 
     def get_word_at_position(self, position):
-        """Lấy toàn bộ từ tại vị trí position trong editor, xử lý đúng Unicode."""
-        # Xác định ranh giới của từ tại vị trí position
+        """Get the entire word at position in the editor, handling Unicode correctly."""
+        # Determine the boundaries of the word at position
         start_pos = self.SendScintilla(self.SCI_WORDSTARTPOSITION, position, True)
         end_pos = self.SendScintilla(self.SCI_WORDENDPOSITION, position, True)
 
-        # Nếu vị trí không hợp lệ hoặc không nằm trong từ
+        # If the position is invalid or not within a word
         if start_pos == end_pos:
             return ""
 
-        # Lấy độ dài toàn bộ văn bản
+        # Get the length of the entire text
         text_length = self.SendScintilla(self.SCI_GETTEXTLENGTH)
 
-        # Kiểm tra ranh giới
+        # Check boundaries
         if start_pos < 0 or end_pos > text_length or start_pos > end_pos:
             return ""
 
-        # Tạo buffer cho đoạn văn bản
-        length = end_pos - start_pos + 1  # +1 cho ký tự null
+        # Create a buffer for the text segment
+        length = end_pos - start_pos + 1  # +1 for the null character
         buffer = bytes(length)
 
-        # Thiết lập khoảng vị trí để lấy đoạn văn bản
+        # Set the position range to get the text segment
         self.SendScintilla(self.SCI_SETTARGETSTART, start_pos)
         self.SendScintilla(self.SCI_SETTARGETEND, end_pos)
 
-        # Lấy đoạn văn bản trực tiếp từ Scintilla dưới dạng byte
+        # Get the text segment directly from Scintilla as bytes
         self.SendScintilla(self.SCI_GETTARGETTEXT, 0, buffer)
 
-        # Chuyển đổi từ byte sang chuỗi Unicode
+        # Convert from bytes to Unicode string
         word = buffer.decode('utf-8', errors='ignore').rstrip('\x00').strip()
         return word
 
     def highlight_current_word(self):
         """Highlight all occurrences of the current word in C/C++"""
-        # Đặt indicator hiện tại
+        # Set the current indicator
         self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.highlight_indicator)
         
-        # Xóa highlight cũ
+        # Clear old highlight
         self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, self.length())
 
-        # Lấy vị trí con trỏ hiện tại
+        # Get the current cursor position
         pos = self.SendScintilla(self.SCI_GETCURRENTPOS)
         word = self.get_word_at_position(pos)
 
-        # Kiểm tra xem từ có hợp lệ không (chỉ chứa chữ cái, số hoặc dấu gạch dưới)
+        # Check if the word is valid (only contains letters, numbers, or underscore)
         if not word or not any(c.isalnum() or c == '_' for c in word):
             return
 
-        # Thiết lập tìm kiếm với ranh giới từ
+        # Set search flags with word boundaries
         self.SendScintilla(self.SCI_SETSEARCHFLAGS, QsciScintilla.SCFIND_WHOLEWORD)
         
-        # Lấy toàn bộ văn bản
+        # Get the entire text
         full_text = self.text()
         text_length = len(full_text)
         search_pos = 0
 
-        # Tìm và highlight tất cả các lần xuất hiện
+        # Find and highlight all occurrences
         while search_pos < text_length:
             self.SendScintilla(self.SCI_SETTARGETSTART, search_pos)
             self.SendScintilla(self.SCI_SETTARGETEND, text_length)
             
             found_pos = self.SendScintilla(self.SCI_SEARCHINTARGET, len(word), word.encode('utf-8'))
-            if found_pos == -1:  # Không còn từ nào được tìm thấy
+            if found_pos == -1:  # No more words found
                 break
             
-            # Highlight từ tìm thấy
+            # Highlight the found word
             self.SendScintilla(self.SCI_INDICATORFILLRANGE, found_pos, len(word))
-            search_pos = found_pos + len(word)  # Tiếp tục tìm từ vị trí tiếp theo
+            search_pos = found_pos + len(word)  # Continue searching from the next position
 
-        # Khôi phục trạng thái tìm kiếm (nếu cần)
+        # Restore search state (if needed)
         self.SendScintilla(self.SCI_SETSEARCHFLAGS, 0)
 
     def mousePressEvent(self, event: QMouseEvent):
@@ -367,19 +367,19 @@ class CodeEditor(QsciScintilla):
         if event.button() == Qt.MouseButton.LeftButton:
             x = event.pos().x()
             y = event.pos().y()
-            # Tính toán vị trí từ tọa độ chuột
+            # Calculate the position from mouse coordinates
             position = self.SendScintilla(QsciScintilla.SCI_POSITIONFROMPOINT, x, y)
-            # Đặt con trỏ tại vị trí chính xác
+            # Set the cursor at the exact position
             line = self.SendScintilla(QsciScintilla.SCI_LINEFROMPOSITION, position)
             index = position - self.SendScintilla(QsciScintilla.SCI_POSITIONFROMLINE, line)
             self.setCursorPosition(line, index)
 
-            # Kiểm tra Ctrl+Click
+            # Check Ctrl+Click
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 word = self.get_word_at_position(position)
                 if word:
                     self.gotoDefinition(word)
-                    return  # Ngăn không gọi sự kiện mặc định nếu nhảy đến định nghĩa
+                    return  # Prevent the default event from being called if jumping to definition
 
         super().mousePressEvent(event)
 
@@ -398,36 +398,34 @@ class CodeEditor(QsciScintilla):
         project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
 
         # Check if the current file has been modified
-        current_modified = os.path.getmtime(self.file_path) if os.path.exists(self.file_path) else None
-        if self.last_modified != current_modified or not self.tags_cache:
+        if self.isModified() or not self.tags_cache:
             # Only regenerate tags if the file has changed or the cache is empty
-            if not os.path.exists(file_tag) or self.last_modified != current_modified:
+            if not os.path.exists(file_tag):
                 if not self.GUI.ctags_handler.generate_ctags():
                     QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
                     return
 
-            # Tạo danh sách các file .tags cần cập nhật
+            # Create a list of .tags files to update
             tag_files = [file_tag]
             if project_tag and os.path.exists(project_tag):
                 tag_files.append(project_tag)
 
-            # Cập nhật self.tags_cache với cả file_tag và project_tag
+            # Update self.tags_cache with both file_tag and project_tag
             self.update_tags_cache(tag_files)
-            self.last_modified = current_modified
 
-        # Tìm kiếm definition trong self.tags_cache
+        # Search for definition in self.tags_cache
         definition = self.tags_cache.get(word)
         if definition:
             file_path, line_number, column = definition
             self.open_file_at_line(file_path, line_number, column)
             return
 
-        # Nếu không tìm thấy, hiển thị thông báo lỗi
+        # If not found, display an error message
         QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
 
     def update_tags_cache(self, tag_files):
         """Update cache from multiple .tags files, including column position of the symbol."""
-        self.tags_cache.clear()  # Chỉ xóa một lần trước khi cập nhật
+        self.tags_cache.clear()  # Clear the cache once before updating
         for tag_file in tag_files:
             if not os.path.exists(tag_file):
                 continue
@@ -443,20 +441,20 @@ class CodeEditor(QsciScintilla):
                         file_path = parts[1]
                         line_info = parts[2]
 
-                        # Xác định tag type (nếu có)
+                        # Determine tag type (if any)
                         tag_type = parts[3] if len(parts) > 3 else 'unknown'
 
                         # Process definition
                         line_number = None
                         column = 0
-                        if tag_type == 'd':  # Trường hợp macro (#define)
-                            # Tìm thông tin dòng từ trường "line:"
+                        if tag_type == 'd':  # Macro case (#define)
+                            # Find line information from the "line:" field
                             for field in parts:
                                 if field.startswith("line:"):
                                     line_number = int(field.split(":")[1])
                                     break
                             if line_number:
-                                # Đọc dòng từ file để tìm vị trí cột
+                                # Read the line from the file to find the column position
                                 with open(file_path, "r", encoding="utf-8") as source_file:
                                     for i, source_line in enumerate(source_file, 1):
                                         if i == line_number:
@@ -465,7 +463,7 @@ class CodeEditor(QsciScintilla):
                                                 column = 0
                                             break
                             else:
-                                # Nếu không có trường line:, sử dụng pattern từ line_info
+                                # If there's no "line:", use the pattern from line_info
                                 if line_info.startswith("/^") and line_info.endswith("$/;\""):
                                     pattern = line_info[2:-4].strip()
                                     with open(file_path, "r", encoding="utf-8") as source_file:
@@ -488,7 +486,7 @@ class CodeEditor(QsciScintilla):
                                         break
                         elif line_info.isdigit():
                             line_number = int(line_info)
-                            # Đọc dòng từ file để tìm vị trí cột
+                            # Read the line from the file to find the column position
                             with open(file_path, "r", encoding="utf-8") as source_file:
                                 for i, source_line in enumerate(source_file, 1):
                                     if i == line_number:
@@ -508,19 +506,19 @@ class CodeEditor(QsciScintilla):
             QMessageBox.warning(self, "CTags", f"File '{file_path}' does not exist.")
             return False
 
-        # Kiểm tra xem file đã mở chưa
+        # Check if the file is already open
         for i in range(self.GUI.tabWidget.count()):
             editor = self.GUI.tabWidget.widget(i)
             if hasattr(editor, 'file_path') and editor.file_path == file_path:
                 self.GUI.tabWidget.setCurrentIndex(i)
-                editor.setCursorPosition(line_number - 1, column)  # Sửa: Đặt con trỏ tại cột chính xác
+                editor.setCursorPosition(line_number - 1, column)  # Set the cursor at the correct column
                 editor.ensureLineVisible(line_number - 1)
                 return True
 
-        # Nếu chưa mở, mở file mới
+        # If not open, open a new file
         editor = self.GUI.open_file(file_path)
         if editor:
-            editor.setCursorPosition(line_number - 1, column)  # Sửa: Đặt con trỏ tại cột chính xác
+            editor.setCursorPosition(line_number - 1, column)  # Set the cursor at the correct column
             editor.ensureLineVisible(line_number - 1)
             return True
         else:
@@ -1192,14 +1190,12 @@ class MainWindow(QMainWindow):
         self.create_menubar()
         self.create_toolbar()
 
+        # Create Terminal
+        self.terminal = Terminal(self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal)
+
         # Initialize SettingsManager
         self.settings_manager = SettingsManager()
-
-        # Set up paths for session and backup
-        # self.app_dir = Path(__file__).parent
-        # self.session_file = self.app_dir / "session.json"
-        # self.backup_dir = self.app_dir / "backups"
-        # self.backup_dir.mkdir(exist_ok=True)
 
         # Load session from SettingsManager instead of session.json
         self.settings_manager.restore_session(self)
@@ -1247,13 +1243,10 @@ class MainWindow(QMainWindow):
 
         # Initialize status bar fields
         self.update_status_bar()
+        self.terminal.exe_first_cmd()
 
         # Connect the cursor position change to update the status bar
         self.tabWidget.currentChanged.connect(self.update_status_bar)
-
-        # Create Console - Terminal
-        self.console = Console(self)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.console)
 
     def set_tab_style(self):
         """Set the style for tabs"""
@@ -1386,7 +1379,7 @@ class MainWindow(QMainWindow):
         # Add Show All Characters action
         self.ShowAllCharAction = QAction("Show All Characters", self)
         self.ShowAllCharAction.setCheckable(True)  # Make it checkable
-        self.ShowAllCharAction.setShortcut("Ctrl+T")  # Optional shortcut
+        self.ShowAllCharAction.setShortcut("Ctrl+J")  # Optional shortcut
         self.ShowAllCharAction.triggered.connect(self.toggle_show_all_char)
         self.addAction(self.ShowAllCharAction)  # Make the shortcut work globally
 
@@ -1414,6 +1407,12 @@ class MainWindow(QMainWindow):
         self.functionlistAction.setCheckable(True)
         self.functionlistAction.setChecked(True)
         self.functionlistAction.toggled.connect(self.toggle_function_list)
+
+        self.toggleterminalAction = QAction("Terminal", self)
+        self.toggleterminalAction.setCheckable(True)
+        self.toggleterminalAction.setChecked(True)
+        self.toggleterminalAction.setShortcut("Ctrl+B")
+        self.toggleterminalAction.triggered.connect(self.toggle_terminal)
 
     def handle_edit_action(self, action):
         current_editor = self.get_current_editor()
@@ -1469,6 +1468,7 @@ class MainWindow(QMainWindow):
         windowMenu.addMenu(show_view_menu)
         show_view_menu.addAction(self.projectviewAction)
         show_view_menu.addAction(self.functionlistAction)
+        show_view_menu.addAction(self.toggleterminalAction)
         
         # Help Menu
         helpMenu = menubar.addMenu("Help")
@@ -1494,6 +1494,13 @@ class MainWindow(QMainWindow):
     def toggle_function_list(self, checked):
         """Toggle visibility of Function List."""
         self.function_list.setVisible(checked)
+
+    def toggle_terminal(self, checked):
+        """Toggle Terminal."""
+        if checked:
+            self.terminal.show()
+        else:
+            self.terminal.hide()
 
     def create_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
@@ -1565,9 +1572,11 @@ class MainWindow(QMainWindow):
                 SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
 
                 # Only generate CTags for source code files
-                if file_path.lower().endswith(SOURCE_EXTENSIONS):
+                file_suffix = Path(file_path).suffix.lower()
+                if file_suffix in SOURCE_EXTENSIONS:
                     self.ctags_handler = CtagsHandler(editor)
-                    self.ctags_handler.generate_ctags()
+                    if not self.ctags_handler.generate_ctags():
+                        pass
 
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)

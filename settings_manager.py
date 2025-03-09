@@ -17,12 +17,17 @@ class SettingsManager:
         """Save the state of the MainWindow interface."""
         self.settings.setValue("MainWindow/State", main_window.saveState())
         self.settings.setValue("MainWindow/Geometry", main_window.saveGeometry())
+        self.settings.setValue("Terminal/Visible", main_window.terminal.isVisible())
 
     def restore_layout(self, main_window):
         """Restore the state of the MainWindow interface."""
         if self.settings.value("MainWindow/State"):
             main_window.restoreState(self.settings.value("MainWindow/State"))
             main_window.restoreGeometry(self.settings.value("MainWindow/Geometry"))
+        if self.settings.value("Terminal/Visible", False, type=bool):
+            main_window.terminal.show()
+        else:
+            main_window.terminal.hide()
 
     def save_session(self, main_window):
         """Save session information instead of session.json."""

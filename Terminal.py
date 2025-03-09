@@ -1,20 +1,14 @@
-from PyQt6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QScrollBar
+from PyQt6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QScrollBar
 from PyQt6.QtGui import QColor, QPalette, QFont, QTextCursor
 from PyQt6.QtCore import Qt, QEvent
 import subprocess
 import os
-import pyte
 
-class Console(QDockWidget):
+class Terminal(QDockWidget):
     def __init__(self, parent=None):
-        super().__init__("Console", parent)
+        super().__init__("Terminal", parent)
         self.parent = parent
 
-        # Initialize pyte screen and stream with larger buffer
-        self.screen = pyte.Screen(120, 10000)  # Increased width and much larger height
-        self.stream = pyte.Stream(self.screen)
-        self.history_buffer = []  # Store command output history
-        
         # Main widget for QDockWidget
         main_widget = QWidget()
         self.setObjectName("TerminalDock")
@@ -31,14 +25,14 @@ class Console(QDockWidget):
         scroll_bar.setSingleStep(1)
         scroll_bar.setPageStep(10)
 
-        # Set black background and font similar to Command Prompt
+        # Set black background and default text color
         palette = self.output_display.palette()
         palette.setColor(QPalette.ColorRole.Base, QColor("#000000"))
         palette.setColor(QPalette.ColorRole.Text, QColor("#C0C0C0"))
         self.output_display.setPalette(palette)
 
         # Set font (Consolas or Lucida Console)
-        font = QFont("Consolas", 10)
+        font = QFont("Consolas", 12)
         self.output_display.setFont(font)
 
         layout.addWidget(self.output_display)
@@ -52,48 +46,28 @@ class Console(QDockWidget):
 
         self.setWidget(main_widget)
         self.setMinimumHeight(100)
-        self.setMaximumHeight(500)  # Increased maximum height
+        self.setMaximumHeight(500)
 
         self.command_history = []
         self.history_index = -1
 
-    def update_display(self):
-        """Update the display with the current screen content and history"""
-        # Combine history buffer with current screen content
-        display_text = ""
-        
-        # Add history buffer
-        for line in self.history_buffer:
-            display_text += line + "\n"
-            
-        # Add current screen content
-        for line in self.screen.display:
-            if line.strip():  # Only add non-empty lines
-                display_text += line + "\n"
-                
-        # Update the display
-        self.output_display.setText(display_text.rstrip())
-        
-        # Move cursor to end and scroll to bottom
-        cursor = self.output_display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.output_display.setTextCursor(cursor)
-        self.output_display.ensureCursorVisible()
+        self.visibilityChanged.connect(self.on_terminal_visibility_changed)
 
-    def process_output(self, output):
-        """Process output through pyte and update display"""
-        # Add current screen content to history before processing new output
-        for line in self.screen.display:
-            if line.strip():  # Only store non-empty lines
-                self.history_buffer.append(line)
-        
-        # Keep history buffer size reasonable (last 1000 lines)
-        if len(self.history_buffer) > 1000:
-            self.history_buffer = self.history_buffer[-1000:]
-            
-        # Process new output
-        self.stream.feed(output)
-        self.update_display()
+    def on_terminal_visibility_changed(self, visible):
+        """Handle when Terminal is hidden/shown (including clicking the 'X' button)."""
+        if hasattr(self.parent, 'toggleterminalAction'):
+            self.parent.toggleterminalAction.setChecked(visible)
+
+    def get_prompt(self):
+        """Tạo dấu nhắc lệnh với thư mục hiện tại và ký hiệu >>>."""
+        cwd = os.getcwd()
+        return f"{cwd} >>> "
+
+    def append_colored_text(self, text, color):
+        """Thêm văn bản với màu sắc vào QTextEdit."""
+        self.output_display.setTextColor(color)
+        self.output_display.append(text)
+        self.output_display.ensureCursorVisible()
 
     def eventFilter(self, obj, event):
         """Catch the Up/Down key event to browse command history."""
@@ -114,15 +88,14 @@ class Console(QDockWidget):
         return super().eventFilter(obj, event)
 
     def add_log(self, log_type, message, prefix=True):
-        """Add a log or output to the console with color based on log type."""
-        # Get the current directory as a prefix
-        cwd = os.getcwd()
-        prompt = f"{cwd}> " if prefix else ""
+        """Add a log or output to the terminal with color based on log type."""
+        # Get the current directory as a prompt
+        prompt = self.get_prompt() if prefix else ""
 
-        # Format log: Prefix + Message
+        # Format log: Prompt + Message
         log_message = f"{prompt}{message}"
 
-        # Set color based on log type (good contrast on black background)
+        # Set color based on log type
         if log_type == "Debug":
             color = QColor("#00C0FF")  # Light blue
         elif log_type == "Error":
@@ -134,18 +107,16 @@ class Console(QDockWidget):
         else:
             color = QColor("#808080")  # Gray for undefined type
 
-        # Set color for text
+        # Display prompt in yellow, message in specified color
+        self.output_display.setTextColor(QColor("#FFFF00"))  # Yellow for prompt
+        self.output_display.insertPlainText(prompt)
         self.output_display.setTextColor(color)
-        # Add log to QTextEdit
-        self.output_display.append(log_message)
-        # Scroll to the last line
+        self.output_display.insertPlainText(f"{message}\n")
         self.output_display.ensureCursorVisible()
 
     def clear_log(self):
-        """Clear all content in the console."""
-        self.screen.reset()
-        self.history_buffer = []  # Clear history buffer
-        self.update_display()
+        """Clear all content in the terminal."""
+        self.output_display.clear()
 
     def execute_command(self):
         """Execute the user's command entered in QLineEdit."""
@@ -153,34 +124,33 @@ class Console(QDockWidget):
         if not command:
             return
 
+        # Add command to history
         if not self.command_history or self.command_history[0] != command:
             self.command_history.insert(0, command)
         self.history_index = -1
 
-        # Feed the command to pyte
-        self.stream.feed(f"{os.getcwd()}> {command}\r\n")
+        # Display the command with prompt in green
+        self.add_log("Command", command)
 
         command_parts = command.split()
         cmd = command_parts[0].lower()
         args = command_parts[1:] if len(command_parts) > 1 else []
 
         if cmd == "clear":
-            self.screen.reset()
-            self.update_display()
+            self.clear_log()
         elif cmd == "help":
             help_text = (
-                "Available commands:\r\n"
-                "  help - Show this help message\r\n"
-                "  clear - Clear the console\r\n"
-                "  open <file_path> - Open a file in the editor\r\n"
-                "  project - Show current project directory\r\n"
-                "  cd <dir> - Change current working directory\r\n"
-                "  cd. - Change to current opened file directory\r\n"
-                "  dir/ls - List files in current directory\r\n"
-                "  (Other system commands like 'echo', 'type' are also supported)\r\n"
+                "Available commands:\n"
+                "  help - Show this help message\n"
+                "  clear - Clear the terminal\n"
+                "  open <file_path> - Open a file in the editor\n"
+                "  project - Show current project directory\n"
+                "  cd <dir> - Change current working directory\n"
+                "  cd. - Change to current opened file directory\n"
+                "  dir/ls - List files in current directory\n"
+                "  (Other system commands like 'echo', 'type' are also supported)"
             )
-            self.stream.feed(help_text)
-            self.update_display()
+            self.add_log("Info", help_text, prefix=False)
         elif cmd == "cd.":
             # Get current editor and its file path
             current_editor = self.parent.get_current_editor()
@@ -188,23 +158,21 @@ class Console(QDockWidget):
                 try:
                     new_dir = os.path.dirname(current_editor.file_path)
                     os.chdir(new_dir)
-                    self.stream.feed(f"Changed directory to: {os.getcwd()}\r\n")
+                    self.add_log("Info", f"Changed directory to: {os.getcwd()}", prefix=False)
                 except Exception as e:
-                    self.stream.feed(f"\x1b[31mFailed to change directory: {str(e)}\x1b[0m\r\n")
+                    self.add_log("Error", f"Failed to change directory: {str(e)}", prefix=False)
             else:
-                self.stream.feed("\x1b[31mNo file currently open or file has not been saved\x1b[0m\r\n")
-            self.update_display()
+                self.add_log("Error", "No file currently open or file has not been saved", prefix=False)
         elif cmd == "cd":
             if not args:
-                self.stream.feed("Error: Usage: cd <directory>\r\n")
+                self.add_log("Error", "Usage: cd <directory>", prefix=False)
             else:
                 try:
                     new_dir = args[0]
                     os.chdir(new_dir)
-                    self.stream.feed(f"Changed directory to: {os.getcwd()}\r\n")
+                    self.add_log("Info", f"Changed directory to: {os.getcwd()}", prefix=False)
                 except Exception as e:
-                    self.stream.feed(f"Error: Failed to change directory: {str(e)}\r\n")
-            self.update_display()
+                    self.add_log("Error", f"Failed to change directory: {str(e)}", prefix=False)
         elif cmd in ["ls", "dir"]:
             try:
                 # Get the target directory (current directory if no args provided)
@@ -219,45 +187,30 @@ class Console(QDockWidget):
                 for item in items:
                     full_path = os.path.join(target_dir, item)
                     if os.path.isdir(full_path):
-                        dirs.append(f"\x1b[36m{item}/\x1b[0m")  # Blue color for directories
+                        dirs.append(f"{item}/")  # Add / to indicate directories
                     else:
-                        files.append(f"\x1b[37m{item}\x1b[0m")  # White color for files
+                        files.append(item)
                 
                 # Combine and sort the lists
                 sorted_items = sorted(dirs) + sorted(files)
                 
                 # Format the output in columns
                 if sorted_items:
-                    # Calculate the maximum width needed
-                    max_width = max(len(item) + 2 for item in sorted_items)  # +2 for spacing
-                    term_width = self.screen.columns
-                    cols = max(1, term_width // max_width)
-                    
-                    # Create the formatted output
-                    output = ""
-                    for i, item in enumerate(sorted_items):
-                        output += f"{item:<{max_width}}"
-                        if (i + 1) % cols == 0:
-                            output += "\r\n"
-                    output += "\r\n"
-                    
-                    self.stream.feed(output)
+                    output = "  ".join(sorted_items)  # Simple space-separated output
+                    self.add_log("Info", output, prefix=False)
                 else:
-                    self.stream.feed("Directory is empty\r\n")
-                    
+                    self.add_log("Info", "Directory is empty", prefix=False)
             except Exception as e:
-                self.stream.feed(f"\x1b[31mError listing directory: {str(e)}\x1b[0m\r\n")
-            self.update_display()
+                self.add_log("Error", f"Error listing directory: {str(e)}", prefix=False)
         elif cmd == "open":
             if not args:
-                self.stream.feed("Error: Usage: open <file_path>\r\n")
+                self.add_log("Error", "Usage: open <file_path>", prefix=False)
             else:
                 try:
                     self.parent.open_file(args[0])
-                    self.stream.feed(f"Opened file: {args[0]}\r\n")
+                    self.add_log("Info", f"Opened file: {args[0]}", prefix=False)
                 except Exception as e:
-                    self.stream.feed(f"Error: Failed to open file {args[0]}: {str(e)}\r\n")
-            self.update_display()
+                    self.add_log("Error", f"Failed to open file {args[0]}: {str(e)}", prefix=False)
         else:
             try:
                 result = subprocess.run(
@@ -268,14 +221,25 @@ class Console(QDockWidget):
                     encoding='utf-8'
                 )
                 if result.stdout:
-                    self.stream.feed(result.stdout)
+                    self.add_log("Info", result.stdout.rstrip(), prefix=False)
                 if result.stderr:
-                    self.stream.feed(f"\x1b[31m{result.stderr}\x1b[0m")  # Red color for errors
+                    self.add_log("Error", result.stderr.rstrip(), prefix=False)
                 if result.returncode != 0 and not result.stdout and not result.stderr:
-                    self.stream.feed(f"\x1b[31mCommand failed with return code {result.returncode}\x1b[0m\r\n")
-                self.update_display()
+                    self.add_log("Error", f"Command failed with return code {result.returncode}", prefix=False)
             except Exception as e:
-                self.stream.feed(f"\x1b[31mFailed to execute system command: {str(e)}\x1b[0m\r\n")
-                self.update_display()
+                self.add_log("Error", f"Failed to execute system command: {str(e)}", prefix=False)
 
         self.command_input.clear()
+
+    def exe_first_cmd(self):
+        """Execute first command - cd."""
+        current_editor = self.parent.get_current_editor()
+        if current_editor and hasattr(current_editor, 'file_path'):
+            try:
+                new_dir = os.path.dirname(current_editor.file_path)
+                os.chdir(new_dir)
+                self.add_log("Info", f"Changed directory to: {os.getcwd()}", prefix=False)
+            except Exception as e:
+                self.add_log("Error", f"Failed to change directory: {str(e)}", prefix=False)
+        else:
+            self.add_log("Error", "No file currently open or file has not been saved", prefix=False)
