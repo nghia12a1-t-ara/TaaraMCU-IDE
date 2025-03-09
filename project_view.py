@@ -13,6 +13,7 @@ class ProjectView:
 
         # Create dock widget for Project View
         self.project_dock = QDockWidget("Project View", parent)
+        self.project_dock.setObjectName("ProjectDock")
         self.project_tree = QTreeView()
         self.project_model = QFileSystemModel()
         
@@ -40,7 +41,7 @@ class ProjectView:
         self.project_dock.visibilityChanged.connect(self.on_project_view_visibility_changed)
 
     def on_project_view_visibility_changed(self, visible):
-        """Xử lý khi Project View bị ẩn/hiển thị (bao gồm nhấp nút 'X')."""
+        """Handle when Project View is hidden/shown (including clicking the 'X' button)."""
         if hasattr(self.parent, 'projectviewAction'):
             self.parent.projectviewAction.setChecked(visible)
 
@@ -109,6 +110,7 @@ class FunctionList(QDockWidget):
 
         # Main widget for Function List
         self.main_widget = QWidget()
+        self.setObjectName("FunctionDock")
         self.layout = QVBoxLayout(self.main_widget)
 
         # TreeWidget to display the list of functions/variables
@@ -123,7 +125,7 @@ class FunctionList(QDockWidget):
         self.visibilityChanged.connect(self.on_function_list_visibility_changed)
 
     def on_function_list_visibility_changed(self, visible):
-        """Xử lý khi Function List bị ẩn/hiển thị (bao gồm nhấp nút 'X')."""
+        """Handle when Function List is hidden/shown (including clicking the 'X' button)."""
         if hasattr(self.parent, 'functionlistAction'):
             self.parent.functionlistAction.setChecked(visible)
 
@@ -211,44 +213,3 @@ class FunctionList(QDockWidget):
                         self.parent.statusBar().showMessage(f"Failed to jump to definition in {file_path}")
                 else:
                     self.parent.statusBar().showMessage(f"Could not find definition in {file_path}")
-
-    # def on_item_double_clicked(self, item, column):
-    #     """Jump to the definition and set the cursor at the symbol position when double-clicked on an item."""
-    #     data = item.data(0, Qt.ItemDataRole.UserRole)
-    #     if data:
-    #         file_path, line_info = data
-    #         editor = self.parent.get_current_editor()
-    #         if editor:
-    #             # Recalculate line_number and find the column position of the symbol from line_info
-    #             line_number = None
-    #             column = 0  # Column position of the symbol within the line
-    #             symbol = item.text(0)  # Get the symbol name from the item (Symbol column)
-
-    #             if line_info.startswith("/^") and line_info.endswith("$/;\""):
-    #                 pattern = line_info[2:-4].strip()
-    #                 try:
-    #                     with open(file_path, 'r', encoding='utf-8') as source_file:
-    #                         for i, source_line in enumerate(source_file, 1):
-    #                             if pattern in source_line.strip():
-    #                                 line_number = i
-    #                                 # Find the column position of the symbol within the line
-    #                                 line_content = source_line
-    #                                 column = line_content.find(symbol)  # Find the starting position of the symbol
-    #                                 break
-    #                 except Exception as e:
-    #                     self.parent.statusBar().showMessage(f"Error reading file {file_path}: {str(e)}")
-    #             elif line_info.isdigit():
-    #                 line_number = int(line_info)
-    #                 # Read the line from the file to find the column position of the symbol
-    #                 try:
-    #                     with open(file_path, 'r', encoding='utf-8') as source_file:
-    #                         for i, source_line in enumerate(source_file, 1):
-    #                             if i == line_number:
-    #                                 column = source_line.find(symbol)  # Find the starting position of the symbol
-    #                                 break
-    #                 except Exception as e:
-    #                     return
-
-    #             if line_number is not None:
-    #                 # Open the file and set the cursor at the symbol position
-    #                 editor.open_file_at_line(file_path, line_number, column)

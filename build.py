@@ -20,8 +20,8 @@ def clean_up():
     """Cleans up unnecessary files and directories after building"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     items_to_remove = [
-        os.path.join(current_dir, 'Taara_Notepad++.exe.spec'),  # .spec file
-        os.path.join(current_dir, 'Taara_Notepad++.spec'),      # .spec file
+        os.path.join(current_dir, 'Taara_IDE.exe.spec'),  # .spec file
+        os.path.join(current_dir, 'Taara_IDE.spec'),      # .spec file
         os.path.join(current_dir, 'build'),      # build directory
         os.path.join(current_dir, 'backups'),    # backups directory
         os.path.join(current_dir, 'dist'),       # dist directory
@@ -44,6 +44,8 @@ def build_exe():
         os.path.join(current_dir, 'main.py'),
         os.path.join(current_dir, 'ctags_handler.py'),
         os.path.join(current_dir, 'project_view.py'),
+        os.path.join(current_dir, 'settings_manager.py'),
+        os.path.join(current_dir, 'Terminal.py'),
     ]
     
     # Check if the Python files exist
@@ -92,7 +94,7 @@ def build_exe():
         pyinstaller_args.append(f'--add-data={json_theme_path}:themes')
 
     # Add the session.json file as data
-    pyinstaller_args.append(f'--add-data={json_file}:.')  # Place in the root when unpacked
+    # pyinstaller_args.append(f'--add-data={json_file}:.')  # Place in the root when unpacked
 
     # Add all Python files to the command
     pyinstaller_args.extend(files)

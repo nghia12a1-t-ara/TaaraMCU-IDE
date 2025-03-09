@@ -1,62 +1,102 @@
-from PyQt6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton
-from PyQt6.QtGui import QColor, QPalette, QFont
+from PyQt6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QScrollBar
+from PyQt6.QtGui import QColor, QPalette, QFont, QTextCursor
 from PyQt6.QtCore import Qt, QEvent
-from datetime import datetime
 import subprocess
 import os
+import pyte
 
 class Console(QDockWidget):
     def __init__(self, parent=None):
         super().__init__("Console", parent)
         self.parent = parent
 
-        # Main widget cho QDockWidget
+        # Initialize pyte screen and stream with larger buffer
+        self.screen = pyte.Screen(120, 10000)  # Increased width and much larger height
+        self.stream = pyte.Stream(self.screen)
+        self.history_buffer = []  # Store command output history
+        
+        # Main widget for QDockWidget
         main_widget = QWidget()
+        self.setObjectName("TerminalDock")
         layout = QVBoxLayout(main_widget)
 
-        # Tạo QTextEdit để hiển thị log/output với nền màu đen
+        # Create QTextEdit to display log/output with black background
         self.output_display = QTextEdit()
-        self.output_display.setReadOnly(True)  # Chỉ đọc
-        self.output_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)  # Không xuống dòng tự động
+        self.output_display.setReadOnly(True)
+        self.output_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.output_display.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
-        # Đặt nền màu đen và font giống Command Prompt
+        # Enable smooth scrolling
+        scroll_bar = self.output_display.verticalScrollBar()
+        scroll_bar.setSingleStep(1)
+        scroll_bar.setPageStep(10)
+
+        # Set black background and font similar to Command Prompt
         palette = self.output_display.palette()
-        palette.setColor(QPalette.ColorRole.Base, QColor("#000000"))  # Nền màu đen
-        palette.setColor(QPalette.ColorRole.Text, QColor("#C0C0C0"))  # Văn bản màu xám nhạt
+        palette.setColor(QPalette.ColorRole.Base, QColor("#000000"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#C0C0C0"))
         self.output_display.setPalette(palette)
 
-        # Đặt font (Consolas hoặc Lucida Console)
-        font = QFont("Consolas", 10)  # Kích thước font 10pt, giống Command Prompt
+        # Set font (Consolas or Lucida Console)
+        font = QFont("Consolas", 10)
         self.output_display.setFont(font)
 
         layout.addWidget(self.output_display)
 
-        # Tạo QLineEdit để nhập lệnh
+        # Create QLineEdit for command input
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText("Enter command here (type 'help' for commands)...")
-        self.command_input.returnPressed.connect(self.execute_command)  # Thực thi lệnh khi nhấn Enter
-        # Cài đặt event filter để bắt phím Lên/Xuống
+        self.command_input.returnPressed.connect(self.execute_command)
         self.command_input.installEventFilter(self)
         layout.addWidget(self.command_input)
 
-        # Nút Clear để xóa log
-        clear_button = QPushButton("Clear")
-        clear_button.clicked.connect(self.clear_log)
-        layout.addWidget(clear_button)
-
-        # Đặt widget vào QDockWidget
         self.setWidget(main_widget)
-
-        # Đặt kích thước tối thiểu và tối đa (tùy chọn)
         self.setMinimumHeight(100)
-        self.setMaximumHeight(300)
+        self.setMaximumHeight(500)  # Increased maximum height
 
-        # Khởi tạo lịch sử lệnh
-        self.command_history = []  # Danh sách lưu lịch sử lệnh
-        self.history_index = -1  # Vị trí hiện tại trong lịch sử (-1: không duyệt)
+        self.command_history = []
+        self.history_index = -1
+
+    def update_display(self):
+        """Update the display with the current screen content and history"""
+        # Combine history buffer with current screen content
+        display_text = ""
+        
+        # Add history buffer
+        for line in self.history_buffer:
+            display_text += line + "\n"
+            
+        # Add current screen content
+        for line in self.screen.display:
+            if line.strip():  # Only add non-empty lines
+                display_text += line + "\n"
+                
+        # Update the display
+        self.output_display.setText(display_text.rstrip())
+        
+        # Move cursor to end and scroll to bottom
+        cursor = self.output_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.output_display.setTextCursor(cursor)
+        self.output_display.ensureCursorVisible()
+
+    def process_output(self, output):
+        """Process output through pyte and update display"""
+        # Add current screen content to history before processing new output
+        for line in self.screen.display:
+            if line.strip():  # Only store non-empty lines
+                self.history_buffer.append(line)
+        
+        # Keep history buffer size reasonable (last 1000 lines)
+        if len(self.history_buffer) > 1000:
+            self.history_buffer = self.history_buffer[-1000:]
+            
+        # Process new output
+        self.stream.feed(output)
+        self.update_display()
 
     def eventFilter(self, obj, event):
-        """Bắt sự kiện phím Lên/Xuống để duyệt lịch sử lệnh."""
+        """Catch the Up/Down key event to browse command history."""
         if obj == self.command_input and event.type() == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Up:
                 if self.history_index + 1 < len(self.command_history):
@@ -74,99 +114,152 @@ class Console(QDockWidget):
         return super().eventFilter(obj, event)
 
     def add_log(self, log_type, message, prefix=True):
-        """Thêm một log hoặc output vào console với màu sắc dựa trên loại log."""
-        # Lấy thư mục hiện tại làm tiền tố
+        """Add a log or output to the console with color based on log type."""
+        # Get the current directory as a prefix
         cwd = os.getcwd()
         prompt = f"{cwd}> " if prefix else ""
 
-        # Định dạng log: Tiền tố + Thông điệp
+        # Format log: Prefix + Message
         log_message = f"{prompt}{message}"
 
-        # Đặt màu sắc dựa trên loại log (tương phản tốt trên nền đen)
+        # Set color based on log type (good contrast on black background)
         if log_type == "Debug":
-            color = QColor("#00C0FF")  # Xanh dương nhạt
+            color = QColor("#00C0FF")  # Light blue
         elif log_type == "Error":
-            color = QColor("#FF0000")  # Đỏ
+            color = QColor("#FF0000")  # Red
         elif log_type == "Info":
-            color = QColor("#C0C0C0")  # Xám nhạt
+            color = QColor("#C0C0C0")  # Light gray
         elif log_type == "Command":
-            color = QColor("#00FF00")  # Xanh lá
+            color = QColor("#00FF00")  # Green
         else:
-            color = QColor("#808080")  # Xám cho loại không xác định
+            color = QColor("#808080")  # Gray for undefined type
 
-        # Đặt màu cho văn bản
+        # Set color for text
         self.output_display.setTextColor(color)
-        # Thêm log vào QTextEdit
+        # Add log to QTextEdit
         self.output_display.append(log_message)
-        # Cuộn xuống dòng cuối cùng
+        # Scroll to the last line
         self.output_display.ensureCursorVisible()
 
     def clear_log(self):
-        """Xóa toàn bộ nội dung trong console."""
-        self.output_display.clear()
+        """Clear all content in the console."""
+        self.screen.reset()
+        self.history_buffer = []  # Clear history buffer
+        self.update_display()
 
     def execute_command(self):
-        """Thực thi lệnh người dùng nhập trong QLineEdit."""
+        """Execute the user's command entered in QLineEdit."""
         command = self.command_input.text().strip()
         if not command:
-            return  # Không làm gì nếu lệnh rỗng
+            return
 
-        # Thêm lệnh vào lịch sử (nếu không trùng với lệnh trước đó)
         if not self.command_history or self.command_history[0] != command:
             self.command_history.insert(0, command)
-        self.history_index = -1  # Reset chỉ số lịch sử
+        self.history_index = -1
 
-        # Hiển thị lệnh người dùng nhập với tiền tố
-        self.add_log("Command", f">{command}")
+        # Feed the command to pyte
+        self.stream.feed(f"{os.getcwd()}> {command}\r\n")
 
-        # Phân tách lệnh thành phần chính và đối số
         command_parts = command.split()
-        cmd = command_parts[0].lower()  # Lệnh chính (ví dụ: "cd", "dir", "open")
-        args = command_parts[1:] if len(command_parts) > 1 else []  # Đối số (nếu có)
+        cmd = command_parts[0].lower()
+        args = command_parts[1:] if len(command_parts) > 1 else []
 
-        # Xử lý lệnh nội bộ trước
-        if cmd == "help":
-            self.add_log("Info", "Available commands:", prefix=False)
-            self.add_log("Info", "  help - Show this help message", prefix=False)
-            self.add_log("Info", "  clear - Clear the console", prefix=False)
-            self.add_log("Info", "  open <file_path> - Open a file in the editor", prefix=False)
-            self.add_log("Info", "  project - Show current project directory", prefix=False)
-            self.add_log("Info", "  cd <dir> - Change current working directory", prefix=False)
-            self.add_log("Info", "  dir/ls - List files in current directory", prefix=False)
-            self.add_log("Info", "  (Other system commands like 'echo', 'type' are also supported)", prefix=False)
-        elif cmd == "clear":
-            self.clear_log()
-        elif cmd == "open":
-            if not args:
-                self.add_log("Error", "Usage: open <file_path>")
-            else:
-                file_path = args[0]
+        if cmd == "clear":
+            self.screen.reset()
+            self.update_display()
+        elif cmd == "help":
+            help_text = (
+                "Available commands:\r\n"
+                "  help - Show this help message\r\n"
+                "  clear - Clear the console\r\n"
+                "  open <file_path> - Open a file in the editor\r\n"
+                "  project - Show current project directory\r\n"
+                "  cd <dir> - Change current working directory\r\n"
+                "  cd. - Change to current opened file directory\r\n"
+                "  dir/ls - List files in current directory\r\n"
+                "  (Other system commands like 'echo', 'type' are also supported)\r\n"
+            )
+            self.stream.feed(help_text)
+            self.update_display()
+        elif cmd == "cd.":
+            # Get current editor and its file path
+            current_editor = self.parent.get_current_editor()
+            if current_editor and hasattr(current_editor, 'file_path'):
                 try:
-                    self.parent.open_file(file_path)  # Gọi phương thức open_file từ MainWindow
-                    self.add_log("Info", f"Opened file: {file_path}")
+                    new_dir = os.path.dirname(current_editor.file_path)
+                    os.chdir(new_dir)
+                    self.stream.feed(f"Changed directory to: {os.getcwd()}\r\n")
                 except Exception as e:
-                    self.add_log("Error", f"Failed to open file {file_path}: {str(e)}")
-        elif cmd == "project":
-            if hasattr(self.parent, 'project_view'):
-                project_dir = self.parent.project_view.get_project_directory()
-                self.add_log("Info", f"Current project directory: {project_dir}")
+                    self.stream.feed(f"\x1b[31mFailed to change directory: {str(e)}\x1b[0m\r\n")
             else:
-                self.add_log("Error", "ProjectView not available")
-        # Xử lý lệnh hệ thống
+                self.stream.feed("\x1b[31mNo file currently open or file has not been saved\x1b[0m\r\n")
+            self.update_display()
         elif cmd == "cd":
             if not args:
-                self.add_log("Error", "Usage: cd <directory>")
+                self.stream.feed("Error: Usage: cd <directory>\r\n")
             else:
                 try:
                     new_dir = args[0]
-                    os.chdir(new_dir)  # Thay đổi thư mục làm việc
-                    self.add_log("Info", f"Changed directory to: {os.getcwd()}")
+                    os.chdir(new_dir)
+                    self.stream.feed(f"Changed directory to: {os.getcwd()}\r\n")
                 except Exception as e:
-                    self.add_log("Error", f"Failed to change directory: {str(e)}")
-        else:
-            # Chạy lệnh hệ thống bằng subprocess
+                    self.stream.feed(f"Error: Failed to change directory: {str(e)}\r\n")
+            self.update_display()
+        elif cmd in ["ls", "dir"]:
             try:
-                # Chạy lệnh với shell=True để hỗ trợ các lệnh như dir, echo, type, v.v.
+                # Get the target directory (current directory if no args provided)
+                target_dir = args[0] if args else "."
+                
+                # Get list of all items in directory
+                items = os.listdir(target_dir)
+                
+                # Sort items (directories first, then files)
+                dirs = []
+                files = []
+                for item in items:
+                    full_path = os.path.join(target_dir, item)
+                    if os.path.isdir(full_path):
+                        dirs.append(f"\x1b[36m{item}/\x1b[0m")  # Blue color for directories
+                    else:
+                        files.append(f"\x1b[37m{item}\x1b[0m")  # White color for files
+                
+                # Combine and sort the lists
+                sorted_items = sorted(dirs) + sorted(files)
+                
+                # Format the output in columns
+                if sorted_items:
+                    # Calculate the maximum width needed
+                    max_width = max(len(item) + 2 for item in sorted_items)  # +2 for spacing
+                    term_width = self.screen.columns
+                    cols = max(1, term_width // max_width)
+                    
+                    # Create the formatted output
+                    output = ""
+                    for i, item in enumerate(sorted_items):
+                        output += f"{item:<{max_width}}"
+                        if (i + 1) % cols == 0:
+                            output += "\r\n"
+                    output += "\r\n"
+                    
+                    self.stream.feed(output)
+                else:
+                    self.stream.feed("Directory is empty\r\n")
+                    
+            except Exception as e:
+                self.stream.feed(f"\x1b[31mError listing directory: {str(e)}\x1b[0m\r\n")
+            self.update_display()
+        elif cmd == "open":
+            if not args:
+                self.stream.feed("Error: Usage: open <file_path>\r\n")
+            else:
+                try:
+                    self.parent.open_file(args[0])
+                    self.stream.feed(f"Opened file: {args[0]}\r\n")
+                except Exception as e:
+                    self.stream.feed(f"Error: Failed to open file {args[0]}: {str(e)}\r\n")
+            self.update_display()
+        else:
+            try:
                 result = subprocess.run(
                     command,
                     shell=True,
@@ -174,18 +267,15 @@ class Console(QDockWidget):
                     text=True,
                     encoding='utf-8'
                 )
-                # Hiển thị kết quả stdout (nếu có)
                 if result.stdout:
-                    self.add_log("Info", result.stdout.strip(), prefix=False)
-                # Hiển thị lỗi stderr (nếu có)
+                    self.stream.feed(result.stdout)
                 if result.stderr:
-                    self.add_log("Error", result.stderr.strip())
-                # Nếu lệnh không trả về gì (như dir trên Windows), kiểm tra return code
+                    self.stream.feed(f"\x1b[31m{result.stderr}\x1b[0m")  # Red color for errors
                 if result.returncode != 0 and not result.stdout and not result.stderr:
-                    self.add_log("Error", f"Command failed with return code {result.returncode}")
+                    self.stream.feed(f"\x1b[31mCommand failed with return code {result.returncode}\x1b[0m\r\n")
+                self.update_display()
             except Exception as e:
-                self.add_log("Error", f"Failed to execute system command: {str(e)}")
+                self.stream.feed(f"\x1b[31mFailed to execute system command: {str(e)}\x1b[0m\r\n")
+                self.update_display()
 
-        # Xóa nội dung trong QLineEdit sau khi thực thi
         self.command_input.clear()
-        

@@ -25,13 +25,13 @@ from PyQt6.Qsci import (
     QsciLexerCPP,
     QsciLexerPython
 )
-from datetime import datetime
 import chardet
 from ctags_handler import CtagsHandler
 import os
 import subprocess
 from project_view import ProjectView, FunctionList
 from Terminal import Console
+from settings_manager import SettingsManager
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
@@ -136,10 +136,10 @@ class CodeEditor(QsciScintilla):
         self.last_modified = None  # Last modified time of the source file
 
     def schedule_update(self):
-        self.update_timer.start(100)  # Trì hoãn 100ms
+        self.update_timer.start(100)  # Delay 100ms
 
     def deferred_update_status_bar(self):
-        self.GUI.update_status_bar()  # Gọi hàm cập nhật thanh trạng thái
+        self.GUI.update_status_bar()  # Call the function to update the status bar
 
     def on_text_changed(self):
         """Handle text changes in the editor"""
@@ -388,14 +388,6 @@ class CodeEditor(QsciScintilla):
         # Check if the current file exists
         if not hasattr(self, 'file_path') or not self.file_path:
             QMessageBox.warning(self, "CTags Error", "No file path available for this editor!")
-            return
-
-        # Define the supported source file formats
-        SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')
-
-        # Check if the current file is in a supported format
-        if not self.file_path.lower().endswith(SOURCE_EXTENSIONS):
-            # QMessageBox.warning(self, "CTags Error", "CTags generation is only supported for source code files!")
             return
 
         # .tags file of the current file (e.g. main.c.tags)
@@ -1184,7 +1176,7 @@ class MainWindow(QMainWindow):
         # Update Function List when switching tabs
         self.tabWidget.currentChanged.connect(self.update_function_list)
 
-        # Thêm Project View
+        # Add Project View
         self.project_view = ProjectView(self)
 
         # Install event filter for right mouse click on tabs
@@ -1200,14 +1192,18 @@ class MainWindow(QMainWindow):
         self.create_menubar()
         self.create_toolbar()
 
-        # Set up paths for session and backup
-        self.app_dir = Path(__file__).parent
-        self.session_file = self.app_dir / "session.json"
-        self.backup_dir = self.app_dir / "backups"
-        self.backup_dir.mkdir(exist_ok=True)
+        # Initialize SettingsManager
+        self.settings_manager = SettingsManager()
 
-        # Load last session
-        self.load_session()
+        # Set up paths for session and backup
+        # self.app_dir = Path(__file__).parent
+        # self.session_file = self.app_dir / "session.json"
+        # self.backup_dir = self.app_dir / "backups"
+        # self.backup_dir.mkdir(exist_ok=True)
+
+        # Load session from SettingsManager instead of session.json
+        self.settings_manager.restore_session(self)
+        self.settings_manager.restore_layout(self)
 
         # If no files were restored, create a new file
         if self.tabWidget.count() == 0:
@@ -1236,7 +1232,7 @@ class MainWindow(QMainWindow):
         self.mainStatusBar.addPermanentWidget(self.encoding_label)
         self.mainStatusBar.addPermanentWidget(self.mode_label)
 
-        self.length_label.setFixedWidth(80)   # Cố định chiều rộng là 80px
+        self.length_label.setFixedWidth(80)   # Fix the width to 80px
         self.lines_label.setFixedWidth(80)
         self.cursor_label.setFixedWidth(200)
         self.line_endings_label.setFixedWidth(120)
@@ -1255,10 +1251,9 @@ class MainWindow(QMainWindow):
         # Connect the cursor position change to update the status bar
         self.tabWidget.currentChanged.connect(self.update_status_bar)
 
-        # Tạo Console
+        # Create Console - Terminal
         self.console = Console(self)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.console)
-        # self.console.add_log("Info", "Application started successfully")
 
     def set_tab_style(self):
         """Set the style for tabs"""
@@ -1403,7 +1398,7 @@ class MainWindow(QMainWindow):
         self.addAction(self.setPythonAction)
         self.addAction(self.setCPPAction)
 
-        # Thêm action để mở thư mục dự án
+        # Add action to open project directory
         self.openprojectAction = QAction("Open Project", self)
         self.openprojectAction.setShortcut("Ctrl+Shift+P")
         self.openprojectAction.triggered.connect(self.open_project_directory)
@@ -1463,12 +1458,6 @@ class MainWindow(QMainWindow):
         editMenu.addAction(self.findAction)
         editMenu.addAction(self.selectAllAction)
 
-        # Help Menu
-        helpMenu = menubar.addMenu("Help")
-        aboutAction = QAction("About", self)
-        aboutAction.triggered.connect(self.about_app)
-        helpMenu.addAction(aboutAction)
-
         # Add Language menu
         languageMenu = menubar.addMenu("Language")
         languageMenu.addAction(self.setPythonAction)
@@ -1481,6 +1470,11 @@ class MainWindow(QMainWindow):
         show_view_menu.addAction(self.projectviewAction)
         show_view_menu.addAction(self.functionlistAction)
         
+        # Help Menu
+        helpMenu = menubar.addMenu("Help")
+        aboutAction = QAction("About", self)
+        aboutAction.triggered.connect(self.about_app)
+        helpMenu.addAction(aboutAction)
 
     def open_project_directory(self):
         """Chọn thư mục dự án và cập nhật Project View."""
@@ -1505,6 +1499,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main Toolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+        toolbar.setObjectName("MainToolbar")
 
         # Add icons to actions
         self.newAction.setIcon(QIcon("icons/new.svg"))
@@ -1833,93 +1828,45 @@ class MainWindow(QMainWindow):
             return False
 
     def closeEvent(self, event):
-        """Handle application close event - save session with confirmation for saved files."""
-        modified_saved_files = []  # Các file đã có sẵn và bị chỉnh sửa
-
-        # Kiểm tra từng tab để phân loại
+        """Handle application close event."""
+        modified_saved_files = []
         for i in range(self.tabWidget.count()):
             editor = self.tabWidget.widget(i)
             if editor.isModified() and hasattr(editor, 'file_path') and editor.file_path:
-                if editor.text().strip():  # Chỉ xử lý nếu có nội dung
+                if editor.text().strip():
                     modified_saved_files.append((i, editor, self.tabWidget.tabText(i)))
 
-        # Hỏi người dùng với các file đã có sẵn và bị chỉnh sửa
         if modified_saved_files:
-            tabs_to_remove = []  # Danh sách các tab sẽ bị xóa nếu chọn Discard
+            tabs_to_remove = []
             for index, editor, filename in modified_saved_files:
                 reply = QMessageBox.question(
-                    self,
-                    "Save Changes",
-                    f"Do you want to save changes to {filename}?",
+                    self, "Save Changes", f"Do you want to save changes to {filename}?",
                     QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
                 )
-
                 if reply == QMessageBox.StandardButton.Save:
                     if not self.save_file_for_editor(editor):
-                        event.ignore()  # Hủy đóng ứng dụng nếu lưu thất bại hoặc bị hủy
+                        event.ignore()
                         return
                 elif reply == QMessageBox.StandardButton.Discard:
-                    # Đánh dấu tab để xóa và xóa file backup nếu có
                     tabs_to_remove.append(index)
-                    if Path(editor.file_path).exists() and str(self.backup_dir) in editor.file_path:
-                        Path(editor.file_path).unlink()  # Xóa file backup nếu là backup
 
-            # Xóa các tab đã chọn Discard
-            for index in sorted(tabs_to_remove, reverse=True):  # Xóa từ cuối để tránh lỗi chỉ số
+            for index in sorted(tabs_to_remove, reverse=True):
                 self.tabWidget.removeTab(index)
 
-        # Lưu session sau khi xử lý tất cả tab
-        try:
-            session_data = {
-                'open_files': [],
-                'unsaved_files': [],
-                'current_tab': self.tabWidget.currentIndex(),
-                'project_directory': self.project_view.get_project_directory()
-            }
+        # Lưu session và layout qua SettingsManager
+        self.settings_manager.save_session(self)
+        self.settings_manager.save_layout(self)
+        event.accept()
 
-            # Process each remaining open tab
-            for i in range(self.tabWidget.count()):
-                editor = self.tabWidget.widget(i)
-                cursor_pos = editor.getCursorPosition()
-                content = editor.text()
+    def hideEvent(self, event):
+        """Lưu trạng thái khi thu nhỏ."""
+        self.settings_manager.save_layout(self)
+        super().hideEvent(event)
 
-                # Store saved files info (file đã có sẵn và không bị chỉnh sửa)
-                if hasattr(editor, 'file_path') and editor.file_path and not editor.isModified():
-                    session_data['open_files'].append({
-                        'path': editor.file_path,
-                        'cursor': cursor_pos
-                    })
-
-                # Store unsaved files (file chưa lưu bao giờ hoặc file đã chỉnh sửa còn lại)
-                if editor.isModified() or not hasattr(editor, 'file_path'):
-                    if content.strip():
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        if hasattr(editor, 'file_path') and editor.file_path:
-                            original_name = Path(editor.file_path).stem
-                            backup_name = f"{original_name}_{timestamp}.txt"
-                        else:
-                            backup_name = f"unsaved_{timestamp}_{i}.txt"
-                        backup_path = str(self.backup_dir / backup_name)
-
-                        with open(backup_path, 'w', encoding='utf-8') as f:
-                            f.write(content)
-
-                        session_data['unsaved_files'].append({
-                            'backup_path': backup_path,
-                            'cursor': cursor_pos,
-                            'original_path': getattr(editor, 'file_path', None),
-                            'tab_name': self.tabWidget.tabText(i),
-                            'timestamp': timestamp
-                        })
-
-            # Save session data to file
-            with open(self.session_file, 'w', encoding='utf-8') as f:
-                json.dump(session_data, f, indent=4)
-
-        except Exception as e:
-            QMessageBox.warning(self, "Session Save Error", f"Error saving session: {str(e)}")
-
-        event.accept()  # Chấp nhận đóng ứng dụng sau khi xử lý
+    def showEvent(self, event):
+        """Khôi phục trạng thái khi hiển thị lại."""
+        self.settings_manager.restore_layout(self)
+        super().showEvent(event)
 
     def eventFilter(self, obj, event):
         """Handle right mouse click on tabs and middle mouse button click to close tabs"""
