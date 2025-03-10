@@ -1339,6 +1339,17 @@ class MainWindow(QMainWindow):
         self.selectAllAction.setShortcut("Ctrl+A")
         self.selectAllAction.triggered.connect(lambda: self.handle_edit_action("select_all"))
 
+        # Compile Execute Action
+        self.compileAction = QAction("Compile", self)
+        self.compileAction.setShortcut("F9")
+        self.compileAction.triggered.connect(self.compile_handle)
+        self.addAction(self.compileAction)
+
+        self.compilerunAction = QAction("Compile & Run", self)
+        self.compilerunAction.setShortcut("F10")
+        self.compilerunAction.triggered.connect(self.compile_run_handle)
+        self.addAction(self.compilerunAction)
+
         # Add Find action
         self.findAction = QAction("Find", self)
         self.findAction.setShortcut("Ctrl+F")
@@ -1456,6 +1467,14 @@ class MainWindow(QMainWindow):
         editMenu.addSeparator()
         editMenu.addAction(self.findAction)
         editMenu.addAction(self.selectAllAction)
+        
+        # Edit Menu
+        editMenu = menubar.addMenu("Execute")
+        editMenu.addAction(self.compileAction)
+        editMenu.addAction(self.compilerunAction)
+        # editMenu.addSeparator()
+        # editMenu.addAction(self.cleanAction)
+        # editMenu.addAction(self.debugAction)
 
         # Add Language menu
         languageMenu = menubar.addMenu("Language")
@@ -1568,16 +1587,6 @@ class MainWindow(QMainWindow):
                 editor.setModified(False)
                 self.add_editor(editor)
 
-                # Define recognized source code extensions
-                SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
-
-                # Only generate CTags for source code files
-                file_suffix = Path(file_path).suffix.lower()
-                if file_suffix in SOURCE_EXTENSIONS:
-                    self.ctags_handler = CtagsHandler(editor)
-                    if not self.ctags_handler.generate_ctags():
-                        pass
-
                 # Restore cursor position
                 editor.setCursorPosition(*cursor_pos)
                 editor.horizontalScrollBar().setValue(0)  # Set to leftmost position
@@ -1588,6 +1597,15 @@ class MainWindow(QMainWindow):
                 
                 # Update Function List after opening a file
                 self.update_function_list()
+
+                # Define recognized source code extensions
+                SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
+
+                # Only generate CTags for source code files
+                file_suffix = Path(file_path).suffix.lower()
+                if file_suffix in SOURCE_EXTENSIONS:
+                    self.ctags_handler = CtagsHandler(editor)
+                    self.ctags_handler.generate_ctags()
 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
@@ -1761,58 +1779,6 @@ class MainWindow(QMainWindow):
         self.find_dialog.activateWindow()
         self.find_dialog.find_input.setFocus()
 
-    def load_session(self):
-        """Load previously opened files, unsaved content, and project directory."""
-        try:
-            if self.session_file.exists():
-                with open(self.session_file, 'r', encoding='utf-8') as f:
-                    session_data = json.load(f)
-
-                    # Load saved files
-                    files = session_data.get('open_files', [])
-                    unsaved_files = session_data.get('unsaved_files', [])
-                    current_tab = session_data.get('current_tab', 0)
-
-                    # Restore saved files
-                    for file_info in files:
-                        file_path = file_info['path']
-                        cursor_pos = tuple(file_info['cursor'])
-                        if Path(file_path).exists():
-                            self.open_file(file_path, cursor_pos)
-
-                    # Restore and open unsaved files from backups
-                    for unsaved in unsaved_files:
-                        backup_path = unsaved['backup_path']
-                        if Path(backup_path).exists():
-                            # Mở file backup
-                            editor = self.open_file(backup_path, tuple(unsaved['cursor']))
-                            # Đảm bảo trạng thái là "unsaved"
-                            if editor:
-                                editor.setModified(True)
-                        else:
-                            # Nếu file backup không tồn tại, tạo editor mới với nội dung trống
-                            editor = CodeEditor(self)
-                            editor.setCursorPosition(*tuple(unsaved['cursor']))
-                            editor.setModified(True)
-                            tab_name = unsaved.get('tab_name', Path(backup_path).stem)
-                            self.tabWidget.addTab(editor, tab_name)
-
-                    # Restore the last active tab
-                    if self.tabWidget.count() > current_tab:
-                        self.tabWidget.setCurrentIndex(current_tab)
-
-                    # Load the last project directory
-                    project_dir = session_data.get('project_directory', '')
-                    if project_dir and os.path.isdir(project_dir):
-                        self.project_view.set_project_directory(project_dir)
-
-            else:
-                # Create an empty session file if it doesn't exist
-                with open(self.session_file, 'w', encoding='utf-8') as f:
-                    json.dump({}, f)
-        except Exception as e:
-            QMessageBox.warning(self, "Session Load Error", f"Error loading session: {str(e)}")
-
     def save_file_for_editor(self, editor):
         """Save the specified editor's content"""
         if not hasattr(editor, 'file_path') or not editor.file_path:
@@ -1861,6 +1827,19 @@ class MainWindow(QMainWindow):
 
             for index in sorted(tabs_to_remove, reverse=True):
                 self.tabWidget.removeTab(index)
+
+        # Remove .tags files for all open files
+        for i in range(self.tabWidget.count()):
+            editor = self.tabWidget.widget(i)
+            if hasattr(editor, 'file_path'):
+                self.ctags_handler = CtagsHandler(editor)
+                self.ctags_handler.remove_ctags()
+
+        # Remove .tags file for current project
+        if hasattr(self, 'project_view') and self.project_view.current_project_directory:
+            project_tags = Path(self.project_view.current_project_directory) / 'project.tags'
+            if project_tags.exists():
+                project_tags.unlink()
 
         # Lưu session và layout qua SettingsManager
         self.settings_manager.save_session(self)
@@ -2166,6 +2145,44 @@ class MainWindow(QMainWindow):
                 if line_number is not None:
                     # Mở file và đặt con trỏ tại vị trí symbol
                     editor.open_file_at_line(file_path, line_number, column)
+    
+    ########## Compile and Execute Handle #############
+    def compile_handle(self):
+        editor = self.get_current_editor()
+        file_suffix = Path(editor.file_path).suffix.lower()
+        file_path = str(Path(editor.file_path).resolve())
+
+        if '.py' == file_suffix:
+            self.terminal.add_log("Command", f"python {file_path}")
+            if self.terminal.execute_specific_command(f"python {file_path}"):
+                self.terminal.add_log("Info", "Python program is executed!")
+        if '.c' == file_suffix:    
+            output_path = str(Path(file_path).with_suffix('.exe'))
+            current_dir = str(Path(file_path).parent)
+            self.terminal.add_log("Command", f"gcc -o {output_path} {file_path} -I {current_dir}")
+            if self.terminal.execute_specific_command(f"gcc -o {output_path} {file_path} -I {current_dir}"):
+                if Path(output_path).exists():
+                    # Get modification times
+                    exe_mtime = os.path.getmtime(output_path)
+                    src_mtime = os.path.getmtime(file_path)
+                    
+                    if exe_mtime >= src_mtime:
+                        self.terminal.add_log("Info", "Executable is up to date")
+                    else:
+                        self.terminal.add_log("Info", "Source file has changed, recompiling...")
+                else:
+                    self.terminal.add_log("Info", "C program is executed!")
+
+    def compile_run_handle(self):
+        self.compile_handle()
+        editor = self.get_current_editor()
+        file_path = str(Path(editor.file_path).resolve())
+        exe_path = str(Path(file_path).with_suffix('.exe'))
+        
+        if Path(exe_path).exists():
+            self.terminal.add_log("Command", exe_path)
+            self.terminal.execute_specific_command(exe_path)
+
 
 def main():
     app = QApplication(sys.argv)
