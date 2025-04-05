@@ -1,4 +1,8 @@
-Build own IDE (focus on Text Editor and Debugger) for Microcontrollers. This tools based on the Python QsciScintilla Library
+# Build Your Own IDE
+
+This project focuses on creating a Text Editor and Debugger for Microcontrollers. This tool is based on the Python QsciScintilla Library.
+
+## Project Structure
 
 taara_debugger/
 │

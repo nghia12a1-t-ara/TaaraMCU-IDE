@@ -26,12 +26,17 @@ from PyQt6.Qsci import (
     QsciLexerPython
 )
 import chardet
-from ctags_handler import CtagsHandler
+from ctags_handler      import  CtagsHandler, CtagsPathDialog
 import os
 import subprocess
-from project_view import ProjectView, FunctionList
-from Terminal import Terminal
-from settings_manager import SettingsManager
+from project_view       import  ProjectView, FunctionList
+from Terminal           import  Terminal
+from settings_manager   import  SettingsManager
+
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
@@ -1147,7 +1152,7 @@ class MainWindow(QMainWindow):
 
         # Set window icon
         icon_path = "icons\\logoIcon.ico"
-        self.setWindowIcon(QIcon(icon_path))
+        self.setWindowIcon(QIcon(resource_path(icon_path)))
 
         # Initialize find dialog
         self.find_dialog = None
@@ -1160,6 +1165,12 @@ class MainWindow(QMainWindow):
 
         # Initialize Tab File Manager
         self.current_tab_index = -1
+
+        # Initialize SettingsManager
+        self.settings_manager = SettingsManager()
+
+        # Check for existing ctags path
+        self.check_ctags_path()
 
         # Add Function List
         self.function_list = FunctionList(self)
@@ -1193,9 +1204,6 @@ class MainWindow(QMainWindow):
         # Create Terminal
         self.terminal = Terminal(self)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal)
-
-        # Initialize SettingsManager
-        self.settings_manager = SettingsManager()
 
         # Load session from SettingsManager instead of session.json
         self.settings_manager.restore_session(self)
@@ -1350,6 +1358,16 @@ class MainWindow(QMainWindow):
         self.compilerunAction.triggered.connect(self.compile_run_handle)
         self.addAction(self.compilerunAction)
 
+        # ctags setting action
+        self.ctagsSettingAction = QAction("ctags Path Settings", self)
+        self.ctagsSettingAction.triggered.connect(self.check_ctags_path)
+        self.addAction(self.ctagsSettingAction)
+
+        # STM32 Framework Action
+        self.setSTM32FrameworkPath = QAction("Set STM32 Framework Path", self)
+        self.setSTM32FrameworkPath.triggered.connect(self.setSTM32FrameworkPath)
+        self.addAction(self.setSTM32FrameworkPath)
+
         # Add Find action
         self.findAction = QAction("Find", self)
         self.findAction.setShortcut("Ctrl+F")
@@ -1409,12 +1427,12 @@ class MainWindow(QMainWindow):
         self.addAction(self.openprojectAction)
 
         # Create actions for project view and function list
-        self.projectviewAction = QAction(QIcon("icons/project.svg"), "Project Explore", self)
+        self.projectviewAction = QAction(QIcon(resource_path("icons/project.svg")), "Project Explore", self)
         self.projectviewAction.setCheckable(True)
         self.projectviewAction.setChecked(True)
         self.projectviewAction.toggled.connect(self.toggle_project_view)
 
-        self.functionlistAction = QAction(QIcon("icons/function_list.svg"), "Function List", self)
+        self.functionlistAction = QAction(QIcon(resource_path("icons/function_list.svg")), "Function List", self)
         self.functionlistAction.setCheckable(True)
         self.functionlistAction.setChecked(True)
         self.functionlistAction.toggled.connect(self.toggle_function_list)
@@ -1468,16 +1486,27 @@ class MainWindow(QMainWindow):
         editMenu.addAction(self.findAction)
         editMenu.addAction(self.selectAllAction)
         
-        # Edit Menu
-        editMenu = menubar.addMenu("Execute")
-        editMenu.addAction(self.compileAction)
-        editMenu.addAction(self.compilerunAction)
-        # editMenu.addSeparator()
-        # editMenu.addAction(self.cleanAction)
-        # editMenu.addAction(self.debugAction)
+        # Execute Menu
+        execMenu = menubar.addMenu("Execute")
+        execMenu.addAction(self.compileAction)
+        execMenu.addAction(self.compilerunAction)
+        # execMenu.addSeparator()
+        # execMenu.addAction(self.cleanAction)
+        # execMenu.addAction(self.debugAction)
 
-        # Add Language menu
-        languageMenu = menubar.addMenu("Language")
+        # Settings Menu
+        SettingMenu = menubar.addMenu("Settings")
+        
+        specsetting_menu    = QMenu("Special Settings", self)
+        languageMenu        = QMenu("Set Language", self)
+        stm32frameworkMenu  = QMenu("STM32 Framework Path", self)
+        SettingMenu.addMenu(specsetting_menu)
+        SettingMenu.addMenu(stm32frameworkMenu)
+        SettingMenu.addMenu(languageMenu)
+
+        # Action of Setting Menu
+        specsetting_menu.addAction(self.ctagsSettingAction)
+        languageMenu.addAction(self.setSTM32FrameworkPath)
         languageMenu.addAction(self.setPythonAction)
         languageMenu.addAction(self.setCPPAction)
 
@@ -1494,6 +1523,26 @@ class MainWindow(QMainWindow):
         aboutAction = QAction("About", self)
         aboutAction.triggered.connect(self.about_app)
         helpMenu.addAction(aboutAction)
+
+    def check_ctags_path(self):
+        """Check if the ctags path is already set."""
+        path = self.settings_manager.get_ctags_path()
+        if path and os.path.exists(path):
+            # Set the ctags path in the handler
+            CtagsHandler.ctags_path = path
+            self.ctags_handler = CtagsHandler(self)
+            self.ctags_handler.ctags_path = path
+            return
+
+        # If no valid path is found, show the dialog
+        dialog = CtagsPathDialog(self.settings_manager)
+        if dialog.exec() != QDialog.accepted:
+            QMessageBox.warning(self, "CTags Path", "CTags path must be set to use this feature.")
+            self.close()        # Close this dialog if the user cancels
+
+    def setSTM32FrameworkPath(self):
+        # @TODO - implement STM32 Framework Path Setting
+        pass
 
     def open_project_directory(self):
         """Chọn thư mục dự án và cập nhật Project View."""
@@ -1528,12 +1577,12 @@ class MainWindow(QMainWindow):
         toolbar.setObjectName("MainToolbar")
 
         # Add icons to actions
-        self.newAction.setIcon(QIcon("icons/new.svg"))
-        self.openAction.setIcon(QIcon("icons/open.svg"))
-        self.openprojectAction.setIcon(QIcon("icons/open_proj.svg"))
-        self.saveAction.setIcon(QIcon("icons/save.svg"))
-        self.wordWrapAction.setIcon(QIcon("icons/word-wrap.svg"))
-        self.ShowAllCharAction.setIcon(QIcon("icons/show_all_char.svg"))
+        self.newAction.setIcon(QIcon(resource_path("icons/new.svg")))
+        self.openAction.setIcon(QIcon(resource_path("icons/open.svg")))
+        self.openprojectAction.setIcon(QIcon(resource_path("icons/open_proj.svg")))
+        self.saveAction.setIcon(QIcon(resource_path("icons/save.svg")))
+        self.wordWrapAction.setIcon(QIcon(resource_path("icons/word-wrap.svg")))
+        self.ShowAllCharAction.setIcon(QIcon(resource_path("icons/show_all_char.svg")))
 
         # Add actions to toolbar
         toolbar.addAction(self.newAction)
@@ -2182,7 +2231,6 @@ class MainWindow(QMainWindow):
         if Path(exe_path).exists():
             self.terminal.add_log("Command", exe_path)
             self.terminal.execute_specific_command(exe_path)
-
 
 def main():
     app = QApplication(sys.argv)

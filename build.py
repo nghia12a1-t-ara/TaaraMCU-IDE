@@ -8,7 +8,7 @@ from win32com.client import Dispatch
 def create_shortcut(exe_path, working_dir):
     """Creates a shortcut on the Desktop with a specific working directory"""
     desktop = winshell.desktop()  # Get the path to the Desktop
-    shortcut_path = os.path.join(desktop, 'Taara_Notepad++.lnk')  # Name of the shortcut
+    shortcut_path = os.path.join(desktop, 'Taara_IDE.lnk')  # Name of the shortcut
     shell = Dispatch('WScript.Shell')
     shortcut = shell.CreateShortCut(shortcut_path)
     shortcut.Targetpath = exe_path  # Path to the exe file
@@ -51,14 +51,24 @@ def build_exe():
     # Check if the Python files exist
     for file_path in files:
         if not os.path.exists(file_path):
+            print(f"Error: File {file_path} does not exist.")
             sys.exit(1)
 
-    # Path to the directory containing SVG files (the 'icons' directory)
+    # Path to the directories containing resource files
     svg_folder = os.path.join(current_dir, 'icons')
     themes_folder = os.path.join(current_dir, 'themes')
+    session_file = os.path.join(current_dir, 'session.json')
+    icon_file = os.path.join(current_dir, 'icons', 'logoIcon.ico')
 
-    # Check the icons directory
+    # Check if resource directories and files exist
     if not os.path.exists(svg_folder):
+        print(f"Error: Icons folder {svg_folder} does not exist.")
+        sys.exit(1)
+    if not os.path.exists(themes_folder):
+        print(f"Error: Themes folder {themes_folder} does not exist.")
+        sys.exit(1)
+    if not os.path.exists(icon_file):
+        print(f"Error: Icon file {icon_file} does not exist.")
         sys.exit(1)
 
     # Get all .svg files in the icons directory
@@ -67,9 +77,6 @@ def build_exe():
     # Get all .json files in the themes directory
     json_theme_files = [f for f in os.listdir(themes_folder) if f.endswith('.json')]
 
-    # Path to the session.json file
-    json_file = os.path.join(current_dir, 'session.json')
-
     # PyInstaller command configuration
     pyinstaller_args = [
         '--onefile',            # Build into a single exe file
@@ -77,8 +84,8 @@ def build_exe():
         '--noconsole',          # Do not display a console when running
         '--noupx',              # Do not use UPX to compress
         '-F',                   # Similar to --onefile
-        '-n', 'Taara_IDE.exe',        # Name of the output exe file
-        '--icon', 'icons/logoIcon.ico',    # Full path to the icon
+        '-n', 'Taara_IDE.exe',  # Name of the output exe file
+        '--icon', icon_file,    # Full path to the icon
         '--uac-admin',
         '--distpath', '.',      # Output directory
     ]
@@ -86,15 +93,16 @@ def build_exe():
     # Add all .svg files as data
     for svg_file in svg_files:
         svg_path = os.path.join(svg_folder, svg_file)
-        pyinstaller_args.append(f'--add-data={svg_path}:icons')  # Correct the syntax
+        pyinstaller_args.append(f'--add-data={svg_path}{os.pathsep}icons')
 
     # Add all .json files in the themes directory as data
     for json_theme_file in json_theme_files:
         json_theme_path = os.path.join(themes_folder, json_theme_file)
-        pyinstaller_args.append(f'--add-data={json_theme_path}:themes')
+        pyinstaller_args.append(f'--add-data={json_theme_path}{os.pathsep}themes')
 
     # Add the session.json file as data
-    # pyinstaller_args.append(f'--add-data={json_file}:.')  # Place in the root when unpacked
+    if os.path.exists(session_file):
+        pyinstaller_args.append(f'--add-data={session_file}{os.pathsep}.')
 
     # Add all Python files to the command
     pyinstaller_args.extend(files)
@@ -102,6 +110,7 @@ def build_exe():
     try:
         print("Building the exe file...")
         print(f"Found {len(svg_files)} SVG files: {svg_files}")
+        print(f"Found {len(json_theme_files)} theme JSON files: {json_theme_files}")
         PyInstaller.__main__.run(pyinstaller_args)
         print(f"Build completed! The exe file is created in the directory '{current_dir}'")
         
@@ -111,7 +120,8 @@ def build_exe():
 
         # Create a shortcut on the Desktop
         print("Creating a shortcut on the Desktop...")
-        create_shortcut(f"{current_dir}/Taara_Notepad++.exe", current_dir)
+        exe_path = os.path.join(current_dir, 'Taara_IDE.exe')
+        create_shortcut(exe_path, current_dir)
         
     except Exception as e:
         print(f"Build failed: {str(e)}")

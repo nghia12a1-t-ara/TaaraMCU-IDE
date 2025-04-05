@@ -122,3 +122,11 @@ class SettingsManager:
     def clear_session(self):
         """Clear session information."""
         self.settings.remove("Session/Data")
+
+    def set_ctags_path(self, path):
+        """Set the path to the ctags executable."""
+        self.settings.setValue("CTags/Path", path)
+
+    def get_ctags_path(self):
+        """Get the path to the ctags executable."""
+        return self.settings.value("CTags/Path", None, type=str)
