@@ -130,3 +130,11 @@ class SettingsManager:
     def get_ctags_path(self):
         """Get the path to the ctags executable."""
         return self.settings.value("CTags/Path", None, type=str)
+
+    def set_stm32_framework_path(self, path):
+        """Set the path to the STM32 framework."""
+        self.settings.setValue("STM32Framework/Path", path)
+
+    def get_stm32_framework_path(self):
+        """Get the path to the STM32 framework."""
+        return self.settings.value("STM32Framework/Path", None, type=str)

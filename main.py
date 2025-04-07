@@ -32,6 +32,7 @@ import subprocess
 from project_view       import  ProjectView, FunctionList
 from Terminal           import  Terminal
 from settings_manager   import  SettingsManager
+from stm32_framework_handler import STM32FrameworkHandler, InstallFrameworkDialog, CreateProjectDialog
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -1160,17 +1161,23 @@ class MainWindow(QMainWindow):
         # UI Manager Variables
         self._showallchar   = False
         self._wordwrap      = False
-
         self.ctags_handler  = None
-
-        # Initialize Tab File Manager
         self.current_tab_index = -1
 
         # Initialize SettingsManager
         self.settings_manager = SettingsManager()
-
         # Check for existing ctags path
         self.check_ctags_path()
+
+        # Create Terminal
+        self.terminal = Terminal(self)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal)
+
+        # STM32 Framework Setting
+        self.stm32_handler = STM32FrameworkHandler(self.settings_manager, self.terminal)
+        # Check framework status
+        if self.stm32_handler.framework_installed:
+            self.statusBar().showMessage("TaaraFramework detected", 3000)
 
         # Add Function List
         self.function_list = FunctionList(self)
@@ -1200,10 +1207,6 @@ class MainWindow(QMainWindow):
         self.control_shorcut_actions()
         self.create_menubar()
         self.create_toolbar()
-
-        # Create Terminal
-        self.terminal = Terminal(self)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.terminal)
 
         # Load session from SettingsManager instead of session.json
         self.settings_manager.restore_session(self)
@@ -1256,6 +1259,11 @@ class MainWindow(QMainWindow):
         # Connect the cursor position change to update the status bar
         self.tabWidget.currentChanged.connect(self.update_status_bar)
 
+        # Update the Project View Status follow the STM32 Framework Project
+        project_directory = self.project_view.get_project_directory()
+        if project_directory and os.path.isfile(os.path.join(project_directory, ".taara_project")):
+            self.stm32_handler.load_project_parameters(project_directory)
+
     def set_tab_style(self):
         """Set the style for tabs"""
         # Style for the tab widget
@@ -1306,7 +1314,7 @@ class MainWindow(QMainWindow):
 
     def control_shorcut_actions(self):
         # File actions
-        self.newAction = QAction("New", self)
+        self.newAction = QAction("New File", self)
         self.newAction.setShortcut("Ctrl+N")
         self.newAction.triggered.connect(self.new_file)
 
@@ -1347,7 +1355,12 @@ class MainWindow(QMainWindow):
         self.selectAllAction.setShortcut("Ctrl+A")
         self.selectAllAction.triggered.connect(lambda: self.handle_edit_action("select_all"))
 
-        # Compile Execute Action
+        # Clean & Compile Execute Action
+        self.cleanAction = QAction("Clean", self)
+        self.cleanAction.setShortcut("F8")
+        self.cleanAction.triggered.connect(self.clean_handle)
+        self.addAction(self.cleanAction)
+
         self.compileAction = QAction("Compile", self)
         self.compileAction.setShortcut("F9")
         self.compileAction.triggered.connect(self.compile_handle)
@@ -1358,6 +1371,11 @@ class MainWindow(QMainWindow):
         self.compilerunAction.triggered.connect(self.compile_run_handle)
         self.addAction(self.compilerunAction)
 
+        self.flashAction = QAction("Flash Programming", self)
+        self.flashAction.setShortcut("F12")
+        self.flashAction.triggered.connect(self.flash_handle)
+        self.addAction(self.flashAction)
+
         # ctags setting action
         self.ctagsSettingAction = QAction("ctags Path Settings", self)
         self.ctagsSettingAction.triggered.connect(self.check_ctags_path)
@@ -1365,7 +1383,7 @@ class MainWindow(QMainWindow):
 
         # STM32 Framework Action
         self.setSTM32FrameworkPath = QAction("Set STM32 Framework Path", self)
-        self.setSTM32FrameworkPath.triggered.connect(self.setSTM32FrameworkPath)
+        self.setSTM32FrameworkPath.triggered.connect(self.STM32FrameworkPath)
         self.addAction(self.setSTM32FrameworkPath)
 
         # Add Find action
@@ -1420,6 +1438,12 @@ class MainWindow(QMainWindow):
         self.addAction(self.setPythonAction)
         self.addAction(self.setCPPAction)
 
+        # Create New STM32 Framework Action
+        self.newSTM32FrameworkPrjAction = QAction("New STM32 Framework Project", self)
+        # self.newSTM32FrameworkPrjAction.setShortcut("Ctrl+Shift+P")
+        self.newSTM32FrameworkPrjAction.triggered.connect(self.create_stm32_project)
+        self.addAction(self.newSTM32FrameworkPrjAction)
+
         # Add action to open project directory
         self.openprojectAction = QAction("Open Project", self)
         self.openprojectAction.setShortcut("Ctrl+Shift+P")
@@ -1432,6 +1456,7 @@ class MainWindow(QMainWindow):
         self.projectviewAction.setChecked(True)
         self.projectviewAction.toggled.connect(self.toggle_project_view)
 
+        # Function List Action
         self.functionlistAction = QAction(QIcon(resource_path("icons/function_list.svg")), "Function List", self)
         self.functionlistAction.setCheckable(True)
         self.functionlistAction.setChecked(True)
@@ -1466,7 +1491,12 @@ class MainWindow(QMainWindow):
 
         # File Menu
         fileMenu = menubar.addMenu("File")
-        fileMenu.addAction(self.newAction)
+        new_menu = QMenu("New Menu", self)
+        fileMenu.addMenu(new_menu)
+        new_menu.addAction(self.newAction)
+        new_menu.addAction(self.newSTM32FrameworkPrjAction)
+
+
         fileMenu.addAction(self.openAction)
         fileMenu.addAction(self.saveAction)
         fileMenu.addAction(self.openprojectAction)
@@ -1488,8 +1518,11 @@ class MainWindow(QMainWindow):
         
         # Execute Menu
         execMenu = menubar.addMenu("Execute")
+        execMenu.addAction(self.cleanAction)
         execMenu.addAction(self.compileAction)
         execMenu.addAction(self.compilerunAction)
+        execMenu.addSeparator()
+        execMenu.addAction(self.flashAction)
         # execMenu.addSeparator()
         # execMenu.addAction(self.cleanAction)
         # execMenu.addAction(self.debugAction)
@@ -1522,7 +1555,10 @@ class MainWindow(QMainWindow):
         helpMenu = menubar.addMenu("Help")
         aboutAction = QAction("About", self)
         aboutAction.triggered.connect(self.about_app)
+        STM32FrameworkInstallAction = QAction("STM32 Framework Installation", self)
+        STM32FrameworkInstallAction.triggered.connect(self.open_install_framework_dialog)
         helpMenu.addAction(aboutAction)
+        helpMenu.addAction(STM32FrameworkInstallAction)
 
     def check_ctags_path(self):
         """Check if the ctags path is already set."""
@@ -1540,12 +1576,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "CTags Path", "CTags path must be set to use this feature.")
             self.close()        # Close this dialog if the user cancels
 
-    def setSTM32FrameworkPath(self):
+    def open_install_framework_dialog(self):
+        dialog = InstallFrameworkDialog(self.settings_manager, self.terminal)
+        if dialog.getstatus():
+            dialog.exec()
+
+    def create_stm32_project(self):
+        """Create a new STM32 project and generate ctags."""
+        projdialog = CreateProjectDialog(self.stm32_handler)
+        projdialog.exec()
+        if projdialog.isProjectCreated:
+            projdialog.isProjectCreated = False
+            self.project_view.set_project_directory(self.stm32_handler.project_path)
+
+    def STM32FrameworkPath(self):
         # @TODO - implement STM32 Framework Path Setting
         pass
 
     def open_project_directory(self):
-        """Chọn thư mục dự án và cập nhật Project View."""
+        """Select project directory and update Project View."""
         directory = QFileDialog.getExistingDirectory(self, "Select Project Directory")
         if directory:
             self.project_view.set_project_directory(directory)
@@ -1578,6 +1627,7 @@ class MainWindow(QMainWindow):
 
         # Add icons to actions
         self.newAction.setIcon(QIcon(resource_path("icons/new.svg")))
+        self.newSTM32FrameworkPrjAction.setIcon(QIcon(resource_path("icons/open_proj.svg")))
         self.openAction.setIcon(QIcon(resource_path("icons/open.svg")))
         self.openprojectAction.setIcon(QIcon(resource_path("icons/open_proj.svg")))
         self.saveAction.setIcon(QIcon(resource_path("icons/save.svg")))
@@ -1896,12 +1946,12 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def hideEvent(self, event):
-        """Lưu trạng thái khi thu nhỏ."""
+        """Save state when minimized."""
         self.settings_manager.save_layout(self)
         super().hideEvent(event)
 
     def showEvent(self, event):
-        """Khôi phục trạng thái khi hiển thị lại."""
+        """Restore state when shown again."""
         self.settings_manager.restore_layout(self)
         super().showEvent(event)
 
@@ -2196,31 +2246,43 @@ class MainWindow(QMainWindow):
                     editor.open_file_at_line(file_path, line_number, column)
     
     ########## Compile and Execute Handle #############
-    def compile_handle(self):
-        editor = self.get_current_editor()
-        file_suffix = Path(editor.file_path).suffix.lower()
-        file_path = str(Path(editor.file_path).resolve())
+    def clean_handle(self):
+        # STM32 Framework Handle
+        if self.stm32_handler.project_available:
+            self.stm32_handler.clean_project()
+        else:
+            pass
 
-        if '.py' == file_suffix:
-            self.terminal.add_log("Command", f"python {file_path}")
-            if self.terminal.execute_specific_command(f"python {file_path}"):
-                self.terminal.add_log("Info", "Python program is executed!")
-        if '.c' == file_suffix:    
-            output_path = str(Path(file_path).with_suffix('.exe'))
-            current_dir = str(Path(file_path).parent)
-            self.terminal.add_log("Command", f"gcc -o {output_path} {file_path} -I {current_dir}")
-            if self.terminal.execute_specific_command(f"gcc -o {output_path} {file_path} -I {current_dir}"):
-                if Path(output_path).exists():
-                    # Get modification times
-                    exe_mtime = os.path.getmtime(output_path)
-                    src_mtime = os.path.getmtime(file_path)
-                    
-                    if exe_mtime >= src_mtime:
-                        self.terminal.add_log("Info", "Executable is up to date")
+    def compile_handle(self):
+        # STM32 Framework Handle
+        if self.stm32_handler.project_available:
+            self.stm32_handler.build_project()
+        else:
+            # Programming Language Handle
+            editor = self.get_current_editor()
+            file_suffix = Path(editor.file_path).suffix.lower()
+            file_path = str(Path(editor.file_path).resolve())
+
+            if '.py' == file_suffix:
+                self.terminal.add_log("Command", f"python {file_path}")
+                if self.terminal.execute_specific_command(f"python {file_path}"):
+                    self.terminal.add_log("Info", "Python program is executed!")
+            if '.c' == file_suffix:    
+                output_path = str(Path(file_path).with_suffix('.exe'))
+                current_dir = str(Path(file_path).parent)
+                self.terminal.add_log("Command", f"gcc -o {output_path} {file_path} -I {current_dir}")
+                if self.terminal.execute_specific_command(f"gcc -o {output_path} {file_path} -I {current_dir}"):
+                    if Path(output_path).exists():
+                        # Get modification times
+                        exe_mtime = os.path.getmtime(output_path)
+                        src_mtime = os.path.getmtime(file_path)
+                        
+                        if exe_mtime >= src_mtime:
+                            self.terminal.add_log("Info", "Executable is up to date")
+                        else:
+                            self.terminal.add_log("Info", "Source file has changed, recompiling...")
                     else:
-                        self.terminal.add_log("Info", "Source file has changed, recompiling...")
-                else:
-                    self.terminal.add_log("Info", "C program is executed!")
+                        self.terminal.add_log("Info", "C program is executed!")
 
     def compile_run_handle(self):
         self.compile_handle()
@@ -2231,6 +2293,15 @@ class MainWindow(QMainWindow):
         if Path(exe_path).exists():
             self.terminal.add_log("Command", exe_path)
             self.terminal.execute_specific_command(exe_path)
+
+    def flash_handle(self):
+        # STM32 Framework Handle
+        if self.stm32_handler.project_available:
+            self.stm32_handler.flash_project()
+        else:
+            pass
+
+    ##################### STM32 Handler ###########################
 
 def main():
     app = QApplication(sys.argv)

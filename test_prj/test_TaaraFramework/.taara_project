@@ -1,0 +1,1 @@
+{"project_dir": "D:/Git_Repository/TaaraMCU-IDE/test_prj/test_TaaraFramework", "project_name": "test_TaaraFramework", "use_framework": "TRUE", "source_files": [], "include_directories": [], "compiler_optimize_level": "O2", "preprocessor": "-DSTM32F4", "linker_options": "-lstdc++ -lm", "mcu": "STM32F4", "compiler_dir": "D:/Git_Repository/TaaraMCU-IDE/test_prj\\compiler"}

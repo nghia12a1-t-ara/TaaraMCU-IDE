@@ -2,9 +2,14 @@
 from PyQt6.QtWidgets import QTreeView, QDockWidget, QHeaderView, QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem
 from PyQt6.QtGui import QFileSystemModel
 from PyQt6.QtCore import QDir, Qt
-import os
+import os, sys
 import subprocess
 from pathlib import Path
+
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class ProjectView:
     def __init__(self, parent):
@@ -84,12 +89,10 @@ class ProjectView:
         tags_file = os.path.join(directory, "project.tags")
         try:
             # Command to generate CTags recursively for the project, including macros
-            ctags_cmd = [r".\ctags\ctags.exe", "--fields=+n", "--kinds-C=+d", "-R", "-f", tags_file, directory]
+            from ctags_handler import CtagsHandler
+            ctags_cmd = [CtagsHandler.ctags_path, "--fields=+n", "--kinds-C=+d", "-R", "-f", tags_file, directory]
             result = subprocess.run(ctags_cmd, capture_output=True, text=True, shell=True)
-            if result.returncode == 0:
-                return True
-            else:
-                return False
+            return True if result.returncode == 0 else False
         except Exception as e:
             return False
         

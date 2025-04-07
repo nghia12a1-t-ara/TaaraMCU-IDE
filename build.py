@@ -2,130 +2,96 @@ import PyInstaller.__main__
 import os
 import sys
 import shutil
-import winshell  # Library to create shortcuts on Windows
+import winshell
 from win32com.client import Dispatch
 
 def create_shortcut(exe_path, working_dir):
-    """Creates a shortcut on the Desktop with a specific working directory"""
-    desktop = winshell.desktop()  # Get the path to the Desktop
-    shortcut_path = os.path.join(desktop, 'Taara_IDE.lnk')  # Name of the shortcut
-    shell = Dispatch('WScript.Shell')
+    desktop = winshell.desktop()
+    shortcut_path = os.path.join(desktop, "Taara_IDE.lnk")
+    shell = Dispatch("WScript.Shell")
     shortcut = shell.CreateShortCut(shortcut_path)
-    shortcut.Targetpath = exe_path  # Path to the exe file
-    shortcut.WorkingDirectory = working_dir  # Working directory
-    shortcut.IconLocation = exe_path  # Use the icon of the exe file itself
+    shortcut.Targetpath = exe_path
+    shortcut.WorkingDirectory = working_dir
+    shortcut.IconLocation = os.path.join(working_dir, "icons", "logoIcon.ico")  # Explicitly use .ico
     shortcut.save()
+    print(f"Shortcut created at: {shortcut_path} with icon {shortcut.IconLocation}")
 
 def clean_up():
-    """Cleans up unnecessary files and directories after building"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    items_to_remove = [
-        os.path.join(current_dir, 'Taara_IDE.exe.spec'),  # .spec file
-        os.path.join(current_dir, 'Taara_IDE.spec'),      # .spec file
-        os.path.join(current_dir, 'build'),      # build directory
-        os.path.join(current_dir, 'backups'),    # backups directory
-        os.path.join(current_dir, 'dist'),       # dist directory
-        os.path.join(current_dir, 'test'),       # test directory
-    ]
-    
+    items_to_remove = ["Taara_IDE.spec", "build", "dist", "backups", "test"]
     for item in items_to_remove:
-        if os.path.exists(item):
-            if os.path.isfile(item):
-                os.remove(item)
-            elif os.path.isdir(item):
-                shutil.rmtree(item)
+        item_path = os.path.join(current_dir, item)
+        if os.path.exists(item_path):
+            if os.path.isfile(item_path):
+                os.remove(item_path)
+            elif os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+            print(f"Removed: {item_path}")
 
 def build_exe():
-    # Path to the current directory
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Python files to be built
     files = [
-        os.path.join(current_dir, 'main.py'),
-        os.path.join(current_dir, 'ctags_handler.py'),
-        os.path.join(current_dir, 'project_view.py'),
-        os.path.join(current_dir, 'settings_manager.py'),
-        os.path.join(current_dir, 'Terminal.py'),
+        "main.py",
+        "ctags_handler.py",
+        "project_view.py",
+        "settings_manager.py",
+        "Terminal.py",
+        "stm32_framework_handler.py",
     ]
-    
-    # Check if the Python files exist
+    files = [os.path.join(current_dir, f) for f in files]
+
     for file_path in files:
         if not os.path.exists(file_path):
             print(f"Error: File {file_path} does not exist.")
             sys.exit(1)
 
-    # Path to the directories containing resource files
-    svg_folder = os.path.join(current_dir, 'icons')
-    themes_folder = os.path.join(current_dir, 'themes')
-    session_file = os.path.join(current_dir, 'session.json')
-    icon_file = os.path.join(current_dir, 'icons', 'logoIcon.ico')
+    svg_folder = os.path.join(current_dir, "icons")
+    themes_folder = os.path.join(current_dir, "themes")
+    session_file = os.path.join(current_dir, "session.json")
+    icon_file = os.path.join(current_dir, "icons", "logoIcon.ico")
 
-    # Check if resource directories and files exist
-    if not os.path.exists(svg_folder):
-        print(f"Error: Icons folder {svg_folder} does not exist.")
-        sys.exit(1)
-    if not os.path.exists(themes_folder):
-        print(f"Error: Themes folder {themes_folder} does not exist.")
-        sys.exit(1)
-    if not os.path.exists(icon_file):
-        print(f"Error: Icon file {icon_file} does not exist.")
-        sys.exit(1)
+    for path, desc in [(svg_folder, "Icons folder"), (themes_folder, "Themes folder"), (icon_file, "Icon file")]:
+        if not os.path.exists(path):
+            print(f"Error: {desc} {path} does not exist.")
+            sys.exit(1)
 
-    # Get all .svg files in the icons directory
-    svg_files = [f for f in os.listdir(svg_folder) if f.endswith('.svg')]
+    svg_files = [os.path.join(svg_folder, f) for f in os.listdir(svg_folder) if f.endswith(".svg")]
+    json_theme_files = [os.path.join(themes_folder, f) for f in os.listdir(themes_folder) if f.endswith(".json")]
 
-    # Get all .json files in the themes directory
-    json_theme_files = [f for f in os.listdir(themes_folder) if f.endswith('.json')]
-
-    # PyInstaller command configuration
     pyinstaller_args = [
-        '--onefile',            # Build into a single exe file
-        '--clean',              # Clean up temporary files before building
-        '--noconsole',          # Do not display a console when running
-        '--noupx',              # Do not use UPX to compress
-        '-F',                   # Similar to --onefile
-        '-n', 'Taara_IDE.exe',  # Name of the output exe file
-        '--icon', icon_file,    # Full path to the icon
-        '--uac-admin',
-        '--distpath', '.',      # Output directory
+        "--onefile",
+        "--clean",
+        "--noconsole",
+        "--noupx",
+        "--name", "Taara_IDE",
+        "--icon", icon_file,
+        "--uac-admin",
+        "--distpath", current_dir,
     ]
-    
-    # Add all .svg files as data
     for svg_file in svg_files:
-        svg_path = os.path.join(svg_folder, svg_file)
-        pyinstaller_args.append(f'--add-data={svg_path}{os.pathsep}icons')
-
-    # Add all .json files in the themes directory as data
-    for json_theme_file in json_theme_files:
-        json_theme_path = os.path.join(themes_folder, json_theme_file)
-        pyinstaller_args.append(f'--add-data={json_theme_path}{os.pathsep}themes')
-
-    # Add the session.json file as data
+        pyinstaller_args.append(f"--add-data={svg_file}{os.pathsep}icons")
+    for json_file in json_theme_files:
+        pyinstaller_args.append(f"--add-data={json_file}{os.pathsep}themes")
     if os.path.exists(session_file):
-        pyinstaller_args.append(f'--add-data={session_file}{os.pathsep}.')
-
-    # Add all Python files to the command
+        pyinstaller_args.append(f"--add-data={session_file}{os.pathsep}.")
     pyinstaller_args.extend(files)
-    
+    pyinstaller_args.append(f"--add-data={icon_file}{os.pathsep}icons")
+
     try:
-        print("Building the exe file...")
-        print(f"Found {len(svg_files)} SVG files: {svg_files}")
-        print(f"Found {len(json_theme_files)} theme JSON files: {json_theme_files}")
+        print(f"Building with icon: {icon_file}")
         PyInstaller.__main__.run(pyinstaller_args)
-        print(f"Build completed! The exe file is created in the directory '{current_dir}'")
-        
-        # Clean up after building
-        print("Cleaning up unnecessary files and directories...")
+        print(f"Build completed: {os.path.join(current_dir, 'Taara_IDE.exe')}")
+
+        print("Cleaning up...")
         clean_up()
 
-        # Create a shortcut on the Desktop
-        print("Creating a shortcut on the Desktop...")
-        exe_path = os.path.join(current_dir, 'Taara_IDE.exe')
+        print("Creating shortcut...")
+        exe_path = os.path.join(current_dir, "Taara_IDE.exe")
         create_shortcut(exe_path, current_dir)
-        
+
     except Exception as e:
         print(f"Build failed: {str(e)}")
         sys.exit(1)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     build_exe()
