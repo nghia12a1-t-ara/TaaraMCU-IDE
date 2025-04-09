@@ -1,0 +1,5 @@
+D:/Git_Repository/TaaraMCU-IDE/STM32_myDevelopment_Framework/STM32F4_Framework/../STM32F4_Drivers/BASE/src/system.c:10:6:DisableAllInterrupt	4	static
+D:/Git_Repository/TaaraMCU-IDE/STM32_myDevelopment_Framework/STM32F4_Framework/../STM32F4_Drivers/BASE/src/system.c:15:6:EnableAllInterrupt	4	static
+D:/Git_Repository/TaaraMCU-IDE/STM32_myDevelopment_Framework/STM32F4_Framework/../STM32F4_Drivers/BASE/src/system.c:27:6:sys_EnableIRQ	16	static
+D:/Git_Repository/TaaraMCU-IDE/STM32_myDevelopment_Framework/STM32F4_Framework/../STM32F4_Drivers/BASE/src/system.c:47:6:sys_DisableIRQ	16	static
+D:/Git_Repository/TaaraMCU-IDE/STM32_myDevelopment_Framework/STM32F4_Framework/../STM32F4_Drivers/BASE/src/system.c:71:6:sysinit	8	static

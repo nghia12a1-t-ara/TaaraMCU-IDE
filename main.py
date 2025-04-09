@@ -2196,26 +2196,28 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Error", f"Could not change line endings: {str(e)}")
 
     def enable_folding(editor: QsciScintilla):
-        editor.setMarginWidth(2, 15)  # Đặt chiều rộng margin thứ 2 (chứa folding)
-        editor.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)  # Kiểu hiển thị folding
+        # Set the width of the second margin to display folding indicators
+        editor.setMarginWidth(2, 15)
+        # Set the folding display style to boxed tree fold style
+        editor.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)
     
     """ Function List Item Handle Functions """
     def update_function_list(self):
-        """Update Function List when switching tabs or opening a file."""
+        """Update the function list when switching tabs or opening a file."""
         current_editor = self.get_current_editor()
         self.function_list.update_function_list(current_editor)
 
     def on_item_double_clicked(self, item, column):
-        """Nhảy đến định nghĩa và đặt con trỏ tại vị trí symbol khi nhấp đúp vào item."""
+        """Handle double-click event on a function list item."""
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if data:
             file_path, line_info = data
             editor = self.parent.get_current_editor()
             if editor:
-                # Tính lại line_number và tìm vị trí cột của symbol từ line_info
+                # Extract line number and column position from line info
                 line_number = None
-                column = 0  # Vị trí cột của symbol trong dòng
-                symbol = item.text(0)  # Lấy tên symbol từ item (cột Symbol)
+                column_position = 0
+                symbol = item.text(0)
 
                 if line_info.startswith("/^") and line_info.endswith("$/;\""):
                     pattern = line_info[2:-4].strip()
@@ -2224,39 +2226,37 @@ class MainWindow(QMainWindow):
                             for i, source_line in enumerate(source_file, 1):
                                 if pattern in source_line.strip():
                                     line_number = i
-                                    # Tìm vị trí cột của symbol trong dòng
-                                    column = source_line.find(symbol)
+                                    column_position = source_line.find(symbol)
                                     break
                     except Exception as e:
                         return
                 elif line_info.isdigit():
                     line_number = int(line_info)
-                    # Đọc dòng từ file để tìm vị trí cột của symbol
                     try:
                         with open(file_path, 'r', encoding='utf-8') as source_file:
                             for i, source_line in enumerate(source_file, 1):
                                 if i == line_number:
-                                    column = source_line.find(symbol)
+                                    column_position = source_line.find(symbol)
                                     break
                     except Exception as e:
                         return
 
                 if line_number is not None:
-                    # Mở file và đặt con trỏ tại vị trí symbol
-                    editor.open_file_at_line(file_path, line_number, column)
+                    # Open the file and place the cursor at the symbol position
+                    editor.open_file_at_line(file_path, line_number, column_position)
     
     ########## Compile and Execute Handle #############
     def clean_handle(self):
         # STM32 Framework Handle
         if self.stm32_handler.project_available:
-            self.stm32_handler.clean_project()
+            self.stm32_handler.project_action("clean")
         else:
             pass
 
     def compile_handle(self):
         # STM32 Framework Handle
         if self.stm32_handler.project_available:
-            self.stm32_handler.build_project()
+            self.stm32_handler.project_action("clean_build")
         else:
             # Programming Language Handle
             editor = self.get_current_editor()
@@ -2297,7 +2297,7 @@ class MainWindow(QMainWindow):
     def flash_handle(self):
         # STM32 Framework Handle
         if self.stm32_handler.project_available:
-            self.stm32_handler.flash_project()
+            self.stm32_handler.project_action("flash")
         else:
             pass
 

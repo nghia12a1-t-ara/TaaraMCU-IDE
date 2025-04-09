@@ -1,45 +1,36 @@
-import os, shutil
+import os, json, shutil
 import subprocess
-import json
-from PyQt6.QtWidgets import (
-    QDialog, QLabel, QLineEdit, QPushButton, 
-    QVBoxLayout, QHBoxLayout, QFileDialog, 
-    QMessageBox, QCheckBox
-)
+from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog
+
 
 class STM32FrameworkHandler:
     def __init__(self, settings_manager, terminal):
-        self.settings_manager   = settings_manager
-        self.terminal           = terminal
-        self.framework_path     = self.load_framework_path()
+        self.settings_manager = settings_manager
+        self.terminal = terminal
+        self.framework_path = self.load_framework_path()
         self.framework_installed = self.check_framework_status()
-        self.project_path               = None
-        self.framework_makefile_path    = None
-        self.project_makefile_path      = None
-        self.framework_content          = None
-        self.makefile_header            = "PROJECT         := USER\n"
-        self.project_available          = False
-        self.project_name               = None
+        self.project_path = None
+        self.project_name = None
+        self.framework_makefile_path = None
+        self.project_makefile_path = None
+        self.framework_content = None
+        self.makefile_header = "PROJECT         := USER\n"
+        self.project_available = False
 
     def set_framework_path(self, path):
-        """Set the path for the STM32 framework."""
         if os.path.exists(path):
             self.framework_path = path
-            self.settings_manager.set_stm32_framework_path(path)  # Save the path using SettingsManager
+            self.settings_manager.set_stm32_framework_path(path)
             QMessageBox.information(None, "Success", "STM32 Framework path set successfully.")
         else:
             QMessageBox.warning(None, "Error", "The specified path does not exist.")
 
     def load_framework_path(self):
-        """Load the framework path from the SettingsManager."""
-        return self.settings_manager.get_stm32_framework_path()  # Get the path using SettingsManager
+        return self.settings_manager.get_stm32_framework_path()
 
     def check_framework_status(self):
-        """Check if the STM32 framework is properly installed"""
-        if not (self.framework_path or os.path.exists(self.framework_path)):
-            return False
-        return True
-    
+        return bool(self.framework_path and os.path.exists(self.framework_path))
+
     def load_project_parameters(self, project_dir):
         """Load project parameters when opening a project and change directory to project path."""
         if not os.path.exists(project_dir):
@@ -65,74 +56,55 @@ class STM32FrameworkHandler:
         self.terminal.execute_specific_command("cd", [self.project_path])
         self.terminal.add_log("Info", "Loaded the STM32 Project follow the Taara-Framework!")
 
-    def install_sdk(self):
-        """Install the STM32 SDK/Framework."""
-        if self.framework_path:
-            try:
-                # Example command to install the SDK/Framework
-                install_command = f"cd {self.framework_path} && ./install.sh"
-                result = subprocess.run(install_command, shell=True, capture_output=True, text=True)
-
-                if result.returncode == 0:
-                    QMessageBox.information(None, "Success", "STM32 SDK/Framework installed successfully.")
-                else:
-                    QMessageBox.warning(None, "Error", f"Failed to install SDK/Framework:\n{result.stderr}")
-            except Exception as e:
-                QMessageBox.warning(None, "Error", f"An error occurred while installing SDK/Framework:\n{str(e)}")
-        else:
-            QMessageBox.warning(None, "Error", "Framework path is not set.")
-
     def clean_project(self):
-        """Clean the STM32 project using Makefile and log the clean command to Terminal"""
         if not os.path.exists(self.project_path):
-            return False, "Project directory does not exist"
-            
-        try:
-            clean_command = "make clean"
-            self.terminal.add_log("Command", clean_command)  # Log the clean command to Terminal
-            result = self.terminal.execute_specific_command(clean_command)
-            if result:
-                self.terminal.add_log("Info", "Clean successful")  # Log success message to Terminal
-            else:
-                self.terminal.add_log("Error", "Clean failed")  # Log error message to Terminal
-        except Exception as e:
-            self.terminal.add_log("Error", f"An error occurred while cleaning the project: {str(e)}")  # Log exception to Terminal
-            return False, str(e)
+            self.terminal.add_log("Error", "Project directory does not exist")
+            return
+
+        def on_clean_finished(_):
+            self.terminal.add_log("Info", "Clean finished")
+
+        self.terminal.run_command("make clean", on_finished=on_clean_finished)
 
     def build_project(self):
-        """Build the STM32 project using Makefile and log the build command to Terminal"""
         if not os.path.exists(self.project_path):
-            return False, "Project directory does not exist"
-        try:
-            self.clean_project()
-            build_command = "make build"
-            self.terminal.add_log("Command", build_command)  # Log the build command to Terminal
-            result = self.terminal.execute_specific_command(build_command)
-            if result:
-                self.terminal.add_log("Info", "Build successful")  # Log success message to Terminal
-            else:
-                self.terminal.add_log("Error", "Build failed")  # Log error message to Terminal
-        except Exception as e:
-            self.terminal.add_log("Error", f"An error occurred while building the project: {str(e)}")  # Log exception to Terminal
-            return False, str(e)
+            self.terminal.add_log("Error", "Project directory does not exist")
+            return
+
+        def on_build_finished(_):
+            self.terminal.add_log("Info", "Build finished")
+
+        self.terminal.run_command("make build", on_finished=on_build_finished)
 
     def flash_project(self):
-        """Flash the compiled project to the STM32 device using Makefile's run command"""
-        # Check if binary exists
         bin_path = os.path.join(self.project_path, "output", f"{self.project_name}.hex")
         if not os.path.exists(bin_path):
-            return False, "Binary file not found. Build the project first."
+            self.terminal.add_log("Error", "Binary file not found. Please build the project first.")
+            return
 
-        # Flash command using Makefile's run target
-        flash_command = "make run"
-        
-        try:
-            self.terminal.add_log("Command", flash_command)
-            self.terminal.add_log("Info", f"Flash the Binary File: {bin_path}")
-            result = self.terminal.execute_specific_command(flash_command)
-            return result
-        except Exception as e:
-            return False, str(e)
+        self.terminal.add_log("Info", f"Flash the Binary File: {bin_path}")
+
+        def on_flash_finished(_):
+            self.terminal.add_log("Info", "Flash finished")
+
+        self.terminal.run_command("make run", on_finished=on_flash_finished)
+
+    def project_action(self, action):
+        if not self.project_available:
+            self.terminal.add_log("Error", "No project loaded.")
+            return
+
+        if action == "clean":
+            self.clean_project()
+        elif action == "build":
+            self.build_project()
+        elif action == "flash":
+            self.flash_project()
+        elif action == "clean_build":
+            self.clean_project()
+            self.build_project()
+        else:
+            self.terminal.add_log("Error", f"Unknown action: {action}")
 
     def create_project(self, project_dir, project_name):
         """Create a new STM32 project using the framework template"""
@@ -351,4 +323,3 @@ class InstallFrameworkDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Failed to install STM32 Framework:\n{result.stderr}")
     def getstatus(self):
         return self.status
-        
