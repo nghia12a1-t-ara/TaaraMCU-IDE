@@ -2,9 +2,10 @@ import os, json, shutil
 import subprocess
 from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog
 
-
 class STM32FrameworkHandler:
+    """Class to handle the STM32 framework and project operations."""
     def __init__(self, settings_manager, terminal):
+        """Initialize the STM32FrameworkHandler."""
         self.settings_manager = settings_manager
         self.terminal = terminal
         self.framework_path = self.load_framework_path()
@@ -18,6 +19,7 @@ class STM32FrameworkHandler:
         self.project_available = False
 
     def set_framework_path(self, path):
+        """Set the framework path."""
         if os.path.exists(path):
             self.framework_path = path
             self.settings_manager.set_stm32_framework_path(path)
@@ -26,9 +28,11 @@ class STM32FrameworkHandler:
             QMessageBox.warning(None, "Error", "The specified path does not exist.")
 
     def load_framework_path(self):
+        """Load the framework path from the settings manager."""
         return self.settings_manager.get_stm32_framework_path()
 
     def check_framework_status(self):
+        """Check if the framework is installed."""
         return bool(self.framework_path and os.path.exists(self.framework_path))
 
     def load_project_parameters(self, project_dir):
@@ -57,6 +61,7 @@ class STM32FrameworkHandler:
         self.terminal.add_log("Info", "Loaded the STM32 Project follow the Taara-Framework!")
 
     def clean_project(self):
+        """Clean the project."""
         if not os.path.exists(self.project_path):
             self.terminal.add_log("Error", "Project directory does not exist")
             return
@@ -67,6 +72,7 @@ class STM32FrameworkHandler:
         self.terminal.run_command("make clean", on_finished=on_clean_finished)
 
     def build_project(self):
+        """Build the project."""
         if not os.path.exists(self.project_path):
             self.terminal.add_log("Error", "Project directory does not exist")
             return
@@ -77,6 +83,7 @@ class STM32FrameworkHandler:
         self.terminal.run_command("make build", on_finished=on_build_finished)
 
     def flash_project(self):
+        """Flash the project."""
         bin_path = os.path.join(self.project_path, "output", f"{self.project_name}.hex")
         if not os.path.exists(bin_path):
             self.terminal.add_log("Error", "Binary file not found. Please build the project first.")
@@ -90,6 +97,7 @@ class STM32FrameworkHandler:
         self.terminal.run_command("make run", on_finished=on_flash_finished)
 
     def project_action(self, action):
+        """Perform an action on the project."""
         if not self.project_available:
             self.terminal.add_log("Error", "No project loaded.")
             return
@@ -178,11 +186,14 @@ class STM32FrameworkHandler:
             file.write(self.makefile_header + self.framework_content)
 
     def close_project(self):
+        """Close the current project."""
         self.project_available = False
         pass
 
 class CreateProjectDialog(QDialog):
+    """Dialog to create a new STM32 project."""
     def __init__(self, stm32_handler, parent=None):
+        """Initialize the CreateProjectDialog."""
         super().__init__(parent)
         self.stm32_handler = stm32_handler
         self.setWindowTitle("Create STM32 Project")
@@ -263,7 +274,9 @@ class CreateProjectDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Failed to create project:\n{str(e)}")
 
 class InstallFrameworkDialog(QDialog):
+    """Dialog to install the STM32 framework."""
     def __init__(self, settings_manager, terminal):
+        """Initialize the InstallFrameworkDialog."""
         super().__init__()
         self.settings_manager = settings_manager
         self.stm32_handler = STM32FrameworkHandler(settings_manager, terminal)  # Create an instance of STM32FrameworkHandler
