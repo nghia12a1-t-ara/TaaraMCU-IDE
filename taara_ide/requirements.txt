@@ -1,0 +1,12 @@
+# Taara IDE Requirements
+
+# GUI Framework
+PyQt6>=6.5.0
+
+PyQt6-QScintilla>=2.14.0
+
+# Debugger support (optional)
+# pygdbmi>=0.11.0.0
+
+# Additional dependencies
+# (Most are part of Python standard library)
