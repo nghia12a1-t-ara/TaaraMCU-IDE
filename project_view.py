@@ -135,7 +135,6 @@ class FunctionList(QDockWidget):
     def update_function_list(self, editor):
         """Update the list of functions and variables based on the self.tags_cache of the current editor."""
         self.tree.clear()  # Clear the old list
-
         if not editor or not hasattr(editor, 'file_path') or not editor.file_path:
             return
 
@@ -145,14 +144,13 @@ class FunctionList(QDockWidget):
             if not os.path.exists(file_tag):
                 self.parent.statusBar().showMessage(f"Tags file not found: {file_tag}")
                 return
-
+            
             project_dir = self.parent.project_view.get_project_directory() if self.parent.project_view else None
             project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
             tag_files = [file_tag]
             if project_tag and os.path.exists(project_tag):
                 tag_files.append(project_tag)
-
-            editor.update_tags_cache(tag_files)
+            editor.logic.update_tags_cache(tag_files)
 
         # Use tags_cache from editor
         try:
@@ -165,10 +163,11 @@ class FunctionList(QDockWidget):
             self.tree.addTopLevelItem(functions)
             variables = QTreeWidgetItem(self.tree, ["Variables"])
             self.tree.addTopLevelItem(variables)
-
+            
             # Classify functions and variables from tags_cache
-            for symbol, (file_path, line_number, column) in editor.tags_cache.items():
+            for symbol, (file_path, line_number, column) in editor.logic.tags_cache.items():
                 tag_type = None
+
                 # Read the .tags file to get tag_type
                 with open(f"{editor.file_path}.tags", 'r', encoding='utf-8') as f:
                     for line in f:

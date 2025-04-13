@@ -5,14 +5,154 @@ from PyQt6.QtWidgets    import QMessageBox
 from pathlib            import Path
 import json
 import os
+from utils.resource     import Result
+
+class CodeLogic():
+    def __init__(self, editor):
+        self.editor     = editor
+        self.tags_cache = {}
+        self.editor_man = self.editor.GUI.editor_manager
+        self.prj_view   = self.editor.GUI.project_view
+
+    def gotoDefinition(self, word):
+        """Find the keyword definition in .tags files, first in current file, then in project."""
+        # Check if the current file exists
+        cur_editor  = self.editor_man.get_current_editor()
+        file_path   = self.editor_man.editors[cur_editor]["file_path"]
+        if not file_path:
+            return Result(success=False, error_code="CTags Error", message="No file path available for this editor!")
+
+        # .tags file of the current file (e.g. main.c.tags)
+        file_tag = f"{file_path}.tags"
+
+        # project.tags file of the project directory
+        project_dir = self.prj_view.get_project_directory() if self.prj_view else None
+        project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
+
+        # Check if the current file has been modified
+        if self.editor_man.editors[cur_editor]["modified"] or not self.tags_cache:
+            # Only regenerate tags if the file has changed or the cache is empty
+            if not os.path.exists(file_tag):
+                if not self.GUI.ctags_handler.generate_ctags():
+                    QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
+                    return Result(success=False, error_code="CTags Error", message="Failed to generate tags file!")
+
+            # Create a list of .tags files to update
+            tag_files = [file_tag]
+            if project_tag and os.path.exists(project_tag):
+                tag_files.append(project_tag)
+
+            # Update self.tags_cache with both file_tag and project_tag
+            self.update_tags_cache(tag_files)
+
+        # Search for definition in self.tags_cache
+        definition = self.tags_cache.get(word)
+        if definition:
+            file_path, line_number, column = definition
+            self.editor.open_file_at_line(file_path, line_number, column)
+            return Result(success=True)
+
+        # If not found, display an error message
+        return Result(success=False, error_code="CTags", message=f"Definition for '{word}' not found!")
+
+    def update_tags_cache(self, tag_files):
+        """Update cache from multiple .tags files, including column position of the symbol."""
+        self.tags_cache.clear()  # Clear the cache once before updating
+
+        for tag_file in tag_files:
+            if not os.path.exists(tag_file):
+                continue
+            try:
+                with open(tag_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("!"):  # Skip comment
+                            continue
+                        parts = line.strip().split("\t")
+                        if len(parts) < 3:
+                            continue
+                        symbol = parts[0]
+                        file_path = parts[1]
+                        line_info = parts[2]
+
+                        # Determine tag type (if any)
+                        tag_type = parts[3] if len(parts) > 3 else 'unknown'
+
+                        # Process definition
+                        line_number = None
+                        column = 0
+                        if tag_type == 'd':  # Macro case (#define)
+                            # Find line information from the "line:" field
+                            for field in parts:
+                                if field.startswith("line:"):
+                                    line_number = int(field.split(":")[1])
+                                    break
+                            if line_number:
+                                # Read the line from the file to find the column position
+                                with open(file_path, "r", encoding="utf-8") as source_file:
+                                    for i, source_line in enumerate(source_file, 1):
+                                        if i == line_number:
+                                            column = source_line.find(symbol)
+                                            if column == -1:
+                                                column = 0
+                                            break
+                            else:
+                                # If there's no "line:", use the pattern from line_info
+                                if line_info.startswith("/^") and line_info.endswith("$/;\""):
+                                    pattern = line_info[2:-4].strip()
+                                    with open(file_path, "r", encoding="utf-8") as source_file:
+                                        for i, source_line in enumerate(source_file, 1):
+                                            if pattern in source_line.strip():
+                                                line_number = i
+                                                column = source_line.find(symbol)
+                                                if column == -1:
+                                                    column = 0
+                                                break
+                        elif line_info.startswith("/^") and line_info.endswith("$/;\""):
+                            pattern = line_info[2:-4].strip()
+                            with open(file_path, "r", encoding="utf-8") as source_file:
+                                for i, source_line in enumerate(source_file, 1):
+                                    if pattern in source_line.strip():
+                                        line_number = i
+                                        column = source_line.find(symbol)
+                                        if column == -1:
+                                            column = 0
+                                        break
+                        elif line_info.isdigit():
+                            line_number = int(line_info)
+                            # Read the line from the file to find the column position
+                            with open(file_path, "r", encoding="utf-8") as source_file:
+                                for i, source_line in enumerate(source_file, 1):
+                                    if i == line_number:
+                                        column = source_line.find(symbol)
+                                        if column == -1:
+                                            column = 0
+                                        break
+
+                        if line_number is not None:
+                            self.tags_cache[symbol] = (file_path, line_number, column)
+            except Exception as e:
+                return
+
+    def set_language(self, language):
+        if language == "Python":
+            self.lexer = QsciLexerPython()
+        elif language == "CPP":
+            self.lexer = QsciLexerCPP()
+        else:
+            self.lexer = None
+        if self.lexer:
+            self.lexer.setDefaultFont(self.text_font)
+            self.setLexer(self.lexer)
+            self.apply_theme()
 
 class CodeEditor(QsciScintilla):
     def __init__(self, parent=None, theme_name="Khaki", language="CPP"):
         super().__init__(parent)
-        self.GUI = parent
+        self.GUI        = parent
+        self.logic      = CodeLogic(self)
 
         # Font configuration
-        self.text_font = QFont("Consolas", 16)
+        self.text_font   = QFont("Consolas", 16)
         self.margin_font = QFont("Consolas", 18)  # Fixed size for margin
 
         # Lexer configuration
@@ -20,7 +160,7 @@ class CodeEditor(QsciScintilla):
         self.lexer.setDefaultFont(self.text_font)
 
         # Set language for file
-        # self.set_language(language)
+        # self.logic.set_language(language)
 
         # Load and apply theme
         self.theme = self.load_theme(theme_name.lower() + ".json")
@@ -60,9 +200,6 @@ class CodeEditor(QsciScintilla):
         self.setIndentationGuides(True)
         self.setAutoIndent(True)
         self.setBackspaceUnindents(True)
-
-        # Edit Action from User
-        self.textChanged.connect(self.on_text_changed)
 
         # Set the default page step for horizontal scroll bar
         self.horizontalScrollBar().setSingleStep(20)  # Adjust the step size as needed
@@ -104,19 +241,11 @@ class CodeEditor(QsciScintilla):
         self.cursorPositionChanged.connect(self.schedule_update)
         self.textChanged.connect(self.schedule_update)
 
-        # Add cache variable for tags
-        self.tags_cache = {}  # Store tags content: {word: (file_path, line_number)}
-        self.last_modified = None  # Last modified time of the source file
-
     def schedule_update(self):
         self.update_timer.start(100)  # Delay 100ms
 
     def deferred_update_status_bar(self):
         self.GUI.update_status_bar()  # Call the function to update the status bar
-
-    def on_text_changed(self):
-        """Handle text changes in the editor"""
-        self.setModified(True)
 
     def maintain_margin_font(self):
         """Keep margin font size fixed regardless of zoom level"""
@@ -147,14 +276,12 @@ class CodeEditor(QsciScintilla):
             super().wheelEvent(event)
 
     def load_theme(self, theme_file):
-        """Load theme from JSON file"""
         try:
             script_dir = Path(__file__).parent
             theme_path = script_dir / "themes" / theme_file
-
             with open(theme_path, 'r') as f:
                 return json.load(f)
-        except Exception as e:
+        except Exception:
             return None
 
     def apply_theme(self):
@@ -263,38 +390,6 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(QsciScintilla.SCI_SETTARGETEND, self.SendScintilla(QsciScintilla.SCI_GETLINEENDPOSITION, end_line))
         self.SendScintilla(QsciScintilla.SCI_REPLACETARGET, len(new_text_bytes), new_text_bytes)
 
-    def get_word_at_position(self, position):
-        """Get the entire word at position in the editor, handling Unicode correctly."""
-        # Determine the boundaries of the word at position
-        start_pos = self.SendScintilla(self.SCI_WORDSTARTPOSITION, position, True)
-        end_pos = self.SendScintilla(self.SCI_WORDENDPOSITION, position, True)
-
-        # If the position is invalid or not within a word
-        if start_pos == end_pos:
-            return ""
-
-        # Get the length of the entire text
-        text_length = self.SendScintilla(self.SCI_GETTEXTLENGTH)
-
-        # Check boundaries
-        if start_pos < 0 or end_pos > text_length or start_pos > end_pos:
-            return ""
-
-        # Create a buffer for the text segment
-        length = end_pos - start_pos + 1  # +1 for the null character
-        buffer = bytes(length)
-
-        # Set the position range to get the text segment
-        self.SendScintilla(self.SCI_SETTARGETSTART, start_pos)
-        self.SendScintilla(self.SCI_SETTARGETEND, end_pos)
-
-        # Get the text segment directly from Scintilla as bytes
-        self.SendScintilla(self.SCI_GETTARGETTEXT, 0, buffer)
-
-        # Convert from bytes to Unicode string
-        word = buffer.decode('utf-8', errors='ignore').rstrip('\x00').strip()
-        return word
-
     def highlight_current_word(self):
         """Highlight all occurrences of the current word in C/C++"""
         # Set the current indicator
@@ -351,127 +446,12 @@ class CodeEditor(QsciScintilla):
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 word = self.get_word_at_position(position)
                 if word:
-                    self.gotoDefinition(word)
-                    return  # Prevent the default event from being called if jumping to definition
-
-        super().mousePressEvent(event)
-
-    def gotoDefinition(self, word):
-        """Find the keyword definition in .tags files, first in current file, then in project."""
-        # Check if the current file exists
-        if not hasattr(self, 'file_path') or not self.file_path:
-            QMessageBox.warning(self, "CTags Error", "No file path available for this editor!")
-            return
-
-        # .tags file of the current file (e.g. main.c.tags)
-        file_tag = f"{self.file_path}.tags"
-
-        # project.tags file of the project directory
-        project_dir = self.GUI.project_view.get_project_directory() if self.GUI.project_view else None
-        project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
-
-        # Check if the current file has been modified
-        if self.isModified() or not self.tags_cache:
-            # Only regenerate tags if the file has changed or the cache is empty
-            if not os.path.exists(file_tag):
-                if not self.GUI.ctags_handler.generate_ctags():
-                    QMessageBox.warning(self, "CTags Error", "Failed to generate tags file!")
+                    result = self.logic.gotoDefinition(word)
+                    if not result.success:
+                        QMessageBox.warning(self, result.error_code, result.message)
                     return
 
-            # Create a list of .tags files to update
-            tag_files = [file_tag]
-            if project_tag and os.path.exists(project_tag):
-                tag_files.append(project_tag)
-
-            # Update self.tags_cache with both file_tag and project_tag
-            self.update_tags_cache(tag_files)
-
-        # Search for definition in self.tags_cache
-        definition = self.tags_cache.get(word)
-        if definition:
-            file_path, line_number, column = definition
-            self.open_file_at_line(file_path, line_number, column)
-            return
-
-        # If not found, display an error message
-        QMessageBox.warning(self, "CTags", f"Definition for '{word}' not found!")
-
-    def update_tags_cache(self, tag_files):
-        """Update cache from multiple .tags files, including column position of the symbol."""
-        self.tags_cache.clear()  # Clear the cache once before updating
-        for tag_file in tag_files:
-            if not os.path.exists(tag_file):
-                continue
-            try:
-                with open(tag_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.startswith("!"):  # Skip comment
-                            continue
-                        parts = line.strip().split("\t")
-                        if len(parts) < 3:
-                            continue
-                        symbol = parts[0]
-                        file_path = parts[1]
-                        line_info = parts[2]
-
-                        # Determine tag type (if any)
-                        tag_type = parts[3] if len(parts) > 3 else 'unknown'
-
-                        # Process definition
-                        line_number = None
-                        column = 0
-                        if tag_type == 'd':  # Macro case (#define)
-                            # Find line information from the "line:" field
-                            for field in parts:
-                                if field.startswith("line:"):
-                                    line_number = int(field.split(":")[1])
-                                    break
-                            if line_number:
-                                # Read the line from the file to find the column position
-                                with open(file_path, "r", encoding="utf-8") as source_file:
-                                    for i, source_line in enumerate(source_file, 1):
-                                        if i == line_number:
-                                            column = source_line.find(symbol)
-                                            if column == -1:
-                                                column = 0
-                                            break
-                            else:
-                                # If there's no "line:", use the pattern from line_info
-                                if line_info.startswith("/^") and line_info.endswith("$/;\""):
-                                    pattern = line_info[2:-4].strip()
-                                    with open(file_path, "r", encoding="utf-8") as source_file:
-                                        for i, source_line in enumerate(source_file, 1):
-                                            if pattern in source_line.strip():
-                                                line_number = i
-                                                column = source_line.find(symbol)
-                                                if column == -1:
-                                                    column = 0
-                                                break
-                        elif line_info.startswith("/^") and line_info.endswith("$/;\""):
-                            pattern = line_info[2:-4].strip()
-                            with open(file_path, "r", encoding="utf-8") as source_file:
-                                for i, source_line in enumerate(source_file, 1):
-                                    if pattern in source_line.strip():
-                                        line_number = i
-                                        column = source_line.find(symbol)
-                                        if column == -1:
-                                            column = 0
-                                        break
-                        elif line_info.isdigit():
-                            line_number = int(line_info)
-                            # Read the line from the file to find the column position
-                            with open(file_path, "r", encoding="utf-8") as source_file:
-                                for i, source_line in enumerate(source_file, 1):
-                                    if i == line_number:
-                                        column = source_line.find(symbol)
-                                        if column == -1:
-                                            column = 0
-                                        break
-
-                        if line_number is not None:
-                            self.tags_cache[symbol] = (file_path, line_number, column)
-            except Exception as e:
-                return
+        super().mousePressEvent(event)
 
     def open_file_at_line(self, file_path, line_number, column=0):
         """Open the file and jump to the corresponding line and column. Return True if successful."""
@@ -496,17 +476,35 @@ class CodeEditor(QsciScintilla):
             return True
         else:
             return False
+    
+    def get_word_at_position(self, position):
+        """Get the entire word at position in the editor, handling Unicode correctly."""
+        # Determine the boundaries of the word at position
+        start_pos = self.SendScintilla(self.SCI_WORDSTARTPOSITION, position, True)
+        end_pos = self.SendScintilla(self.SCI_WORDENDPOSITION, position, True)
 
-    def set_language(self, language):
-        if language == "Python":
-            self.lexer = QsciLexerPython()
-        elif language == "CPP":
-            self.lexer = QsciLexerCPP()
-        else:
-            self.lexer = None
-        if self.lexer:
-            self.lexer.setDefaultFont(self.text_font)
-            self.setLexer(self.lexer)
-            self.apply_theme()
+        # If the position is invalid or not within a word
+        if start_pos == end_pos:
+            return ""
 
+        # Get the length of the entire text
+        text_length = self.SendScintilla(self.SCI_GETTEXTLENGTH)
 
+        # Check boundaries
+        if start_pos < 0 or end_pos > text_length or start_pos > end_pos:
+            return ""
+
+        # Create a buffer for the text segment
+        length = end_pos - start_pos + 1  # +1 for the null character
+        buffer = bytes(length)
+
+        # Set the position range to get the text segment
+        self.SendScintilla(self.SCI_SETTARGETSTART, start_pos)
+        self.SendScintilla(self.SCI_SETTARGETEND, end_pos)
+
+        # Get the text segment directly from Scintilla as bytes
+        self.SendScintilla(self.SCI_GETTARGETTEXT, 0, buffer)
+
+        # Convert from bytes to Unicode string
+        word = buffer.decode('utf-8', errors='ignore').rstrip('\x00').strip()
+        return word

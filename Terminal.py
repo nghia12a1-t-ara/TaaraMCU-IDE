@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal
 import subprocess
 import os
 import queue
-
+import shlex
 
 class TerminalWorker(QThread):
     resultReady = pyqtSignal(str, str)   # (log_type, message)
@@ -51,12 +51,14 @@ class Terminal(QDockWidget):
         self.command_queue = queue.Queue()
         self.command_thread_active = False
 
+        self.current_path = None
+
         main_widget = QWidget()
         layout = QVBoxLayout(main_widget)
 
         self.output_display = QTextEdit()
         self.output_display.setReadOnly(True)
-        self.output_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.output_display.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.output_display.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         font = QFont("Consolas", 12)
@@ -70,7 +72,7 @@ class Terminal(QDockWidget):
 
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText("Enter command here...")
-        self.command_input.returnPressed.connect(self.execute_command)
+        self.command_input.returnPressed.connect(self.execute_input_command)
         self.command_input.installEventFilter(self)
         layout.addWidget(self.command_input)
 
@@ -170,13 +172,25 @@ class Terminal(QDockWidget):
         if cmd == "clear":
             self.clear_log()
             return
-        if cmd == "help":
+        elif cmd == "help":
             self.add_log("Info", "Available commands: make clean, make build, cd, clear, etc.")
             return
-        if cmd == "cd":
+        elif cmd == "cd":
             try:
-                os.chdir(args[0])
-                self.add_log("Info", f"Changed to: {os.getcwd()}")
+                if args[0] == '.':
+                    self.add_log("Info", "Current directory unchanged.")
+                elif args[0] == '..':
+                    self.current_path = os.path.dirname(self.current_path)
+                elif not os.path.isabs(args[0]):
+                    self.current_path = os.path.join(self.current_path, args[0])
+                else:
+                    self.current_path = args[0]
+
+                if args[0] != '.' and os.path.exists(self.current_path):
+                    os.chdir(self.current_path)
+                    self.add_log("Info", f"Changed to: {self.current_path}")
+                else:
+                    return
             except Exception as e:
                 self.add_log("Error", str(e))
             return
@@ -184,7 +198,7 @@ class Terminal(QDockWidget):
         full_cmd = " ".join([cmd] + args)
         self.run_command(full_cmd, on_finished=on_finished)
 
-    def execute_command(self):
+    def execute_input_command(self):
         command = self.command_input.text().strip()
         if not command:
             return
@@ -194,12 +208,22 @@ class Terminal(QDockWidget):
         self.history_index = -1
         self.command_input.clear()
 
-        self.run_command(command)
+        cmd, args = self.parse_command(command)
+        self.execute_specific_command(cmd, args)
+
+    def parse_command(self, command_str):
+        tokens = shlex.split(command_str)
+        if not tokens:
+            return None, []
+        cmd = tokens[0]
+        args = tokens[1:]
+        return cmd, args
 
     def clear_log(self):
         self.output_display.clear()
 
-    def exe_first_cmd(self):
+    def exe_first_cmd(self, current_file_path):
+        self.current_path = current_file_path
         def on_ready(_):
             self.add_log("Info", "Welcome to Taara Embedded Terminal!")
-        self.run_command("cd .", on_finished=on_ready)
+        self.execute_specific_command("cd", [f"{current_file_path}"], on_finished=on_ready)

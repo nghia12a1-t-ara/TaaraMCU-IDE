@@ -1,4 +1,10 @@
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget, QWidget
+from PyQt6.QtWidgets import QGroupBox, QRadioButton, QCheckBox
+from PyQt6.QtWidgets import QMessageBox
+from PyQt6.Qsci import QsciScintilla
+import re
+from pathlib import Path
+import os
 
 # Add this class for the Find Dialog
 class FindDialog(QDialog):

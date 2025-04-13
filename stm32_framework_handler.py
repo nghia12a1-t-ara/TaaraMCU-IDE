@@ -188,6 +188,7 @@ class STM32FrameworkHandler:
     def close_project(self):
         """Close the current project."""
         self.project_available = False
+        self.terminal.add_log("Info", "Closed the STM32 Project follow the Taara-Framework!")
         pass
 
 class CreateProjectDialog(QDialog):

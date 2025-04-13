@@ -117,7 +117,8 @@ class SettingsManager:
                 main_window.project_view.set_project_directory(project_dir)
 
         except Exception as e:
-            print(f"Error restoring session: {str(e)}")
+            pass
+            # print(f"Error restoring session: {str(e)}")
 
     def clear_session(self):
         """Clear session information."""

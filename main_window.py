@@ -13,6 +13,7 @@ from PyQt6.QtGui        import QIcon, QAction
 from PyQt6.QtCore       import Qt
 
 from code_editor        import CodeEditor
+from editor_manager     import EditorManager
 from dialogs.find_dialog        import FindDialog
 from dialogs.goto_line_dialog   import GoToLineDialog
 from Terminal           import Terminal
@@ -21,6 +22,7 @@ from project_view       import ProjectView, FunctionList
 from stm32_framework_handler    import STM32FrameworkHandler, InstallFrameworkDialog, CreateProjectDialog
 from ctags_handler      import CtagsHandler, CtagsPathDialog
 from utils.resource     import resource_path
+from compiler           import CodeCompiler
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -77,6 +79,8 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.tabWidget)
 
+        self.editor_manager = EditorManager(self, self.tabWidget)
+
         # Set the tab style
         self.set_tab_style()
 
@@ -131,7 +135,11 @@ class MainWindow(QMainWindow):
 
         # Initialize status bar fields
         self.update_status_bar()
-        self.terminal.exe_first_cmd()
+
+        # Set the Current File Path of the Opened File
+        cur_file_path = self.editor_manager.get_current_filepath()
+        if cur_file_path:
+            self.terminal.exe_first_cmd(os.path.dirname(self.editor_manager.get_current_filepath()))
 
         # Connect the cursor position change to update the status bar
         self.tabWidget.currentChanged.connect(self.update_status_bar)
@@ -437,6 +445,7 @@ class MainWindow(QMainWindow):
         helpMenu.addAction(aboutAction)
         helpMenu.addAction(STM32FrameworkInstallAction)
 
+    # will move to ctags class
     def check_ctags_path(self):
         """Check if the ctags path is already set."""
         path = self.settings_manager.get_ctags_path()
@@ -474,6 +483,9 @@ class MainWindow(QMainWindow):
         """Select project directory and update Project View."""
         directory = QFileDialog.getExistingDirectory(self, "Select Project Directory")
         if directory:
+            # Close current project if need
+            if self.stm32_handler.project_available:
+                self.stm32_handler.close_project()
             self.project_view.set_project_directory(directory)
 
     def set_editor_language(self, language):
@@ -522,11 +534,7 @@ class MainWindow(QMainWindow):
 
     def new_file(self):
         """Create a new empty file"""
-        editor = CodeEditor(self)  # Ensure self is passed as the parent
-        editor.textChanged.connect(self.on_editor_text_changed)  # Connect the signal
-        self.add_editor(editor)
-        self.tabWidget.addTab(editor, "Untitled")
-        self.tabWidget.setCurrentWidget(editor)  # Set the new editor as the current widget
+        self.editor_manager.new_editor()
 
     def open_file(self, file_path=None, cursor_pos=(0, 0)):
         """Open a file in a new tab, generating CTags only for source code files."""
@@ -539,120 +547,37 @@ class MainWindow(QMainWindow):
             )
 
         if file_path:
-            # Check if file is already open
-            for i in range(self.tabWidget.count()):
-                editor = self.tabWidget.widget(i)
-                if hasattr(editor, 'file_path') and editor.file_path == file_path:
-                    self.tabWidget.setCurrentIndex(i)
-                    return
+            editor = self.editor_manager.open_editor(file_path)
 
             try:
-                # Detect file encoding
-                with open(file_path, 'rb') as f:
-                    raw_data = f.read()
-                    result = chardet.detect(raw_data)
-                    encoding = result['encoding']
+                if editor:
+                    # Restore cursor position
+                    editor.setCursorPosition(*cursor_pos)
+                    editor.horizontalScrollBar().setValue(0)  # Set to leftmost position
 
-                with open(file_path, 'r', encoding=encoding) as f:
-                    text = f.read()
+                    # Define recognized source code extensions
+                    SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
 
-                editor = CodeEditor(self)
-                editor.textChanged.connect(self.on_editor_text_changed)
-                editor.setText(text)
-                editor.file_path = file_path
-                editor.setModified(False)
-                self.add_editor(editor)
+                    # Only generate CTags for source code files
+                    file_suffix = Path(file_path).suffix.lower()
+                    if file_suffix in SOURCE_EXTENSIONS:
+                        self.ctags_handler = CtagsHandler(editor)
+                        self.ctags_handler.generate_ctags()
 
-                # Restore cursor position
-                editor.setCursorPosition(*cursor_pos)
-                editor.horizontalScrollBar().setValue(0)  # Set to leftmost position
-
-                filename = Path(file_path).name
-                index = self.tabWidget.addTab(editor, filename)
-                self.tabWidget.setCurrentIndex(index)
-                
-                # Update Function List after opening a file
-                self.update_function_list()
-
-                # Define recognized source code extensions
-                SOURCE_EXTENSIONS = ('.c', '.cpp', '.h', '.hpp', '.py')  # Add more as needed
-
-                # Only generate CTags for source code files
-                file_suffix = Path(file_path).suffix.lower()
-                if file_suffix in SOURCE_EXTENSIONS:
-                    self.ctags_handler = CtagsHandler(editor)
-                    self.ctags_handler.generate_ctags()
-
+                    # Update Function List after opening a file
+                    self.function_list.update_function_list(editor)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not open file: {str(e)}")
     
     def save_file(self):
         """Save the current file"""
         current_editor = self.get_current_editor()
-        if current_editor is None:
-            return
-        self.set_tab_background_color(self.current_tab_index, "saved")
-
-        if not hasattr(current_editor, 'file_path'):
-            file_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "All Files (*.*)")
-            if file_path:
-                current_editor.file_path = file_path
-            else:
-                return
-        try:
-            with open(current_editor.file_path, 'w', encoding='utf-8') as f:
-                f.write(current_editor.text())
-
-            # Mark the editor as not modified
-            current_editor.setModified(False)
-
-            # Update Tab Color Background
-            self.set_tab_background_color(self.current_tab_index, "saved")
-
-            # Update the tab title to the file name
-            self.tabWidget.setTabText(
-                self.current_tab_index,
-                Path(current_editor.file_path).name
-            )
-            return True
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not save file: {str(e)}")
-            return False
+        if current_editor:
+            self.editor_manager.save_editor(current_editor)
 
     def close_file(self, index):
         """Handle closing a tab"""
-        editor = self.tabWidget.widget(index)
-        if editor.isModified():
-            filename = self.tabWidget.tabText(index)
-            reply = QMessageBox.question(
-                self,
-                "Save Changes",
-                f"Do you want to save changes to {filename}?",
-                QMessageBox.StandardButton.Save |
-                QMessageBox.StandardButton.Discard |
-                QMessageBox.StandardButton.Cancel
-            )
-
-            if reply == QMessageBox.StandardButton.Save:
-                if not self.save_file(editor):
-                    return  # Don't close if save was cancelled
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return  # Don't close if user cancelled
-
-        # Store the closed file information
-        if hasattr(editor, 'file_path'):
-            self.closed_files.append((editor.file_path, editor.text(), editor.getCursorPosition()))
-
-        # Remove ctags file
-        self.ctags_handler = CtagsHandler(editor)
-        self.ctags_handler.remove_ctags()
-
-        # Remove the tab
-        self.tabWidget.removeTab(index)
-
-        # Create a new tab if this was the last one
-        if self.tabWidget.count() == 0:
-            self.new_file()
+        self.editor_manager.close_editor(index)
 
     def about_app(self):
         QMessageBox.information(self, "About", "This is a Notepad++ style Text Editor, develop by Nghia Taarabt and Channel laptrinhdientu.com\nDebugger integration coming soon!")
@@ -887,14 +812,6 @@ class MainWindow(QMainWindow):
         # Show the context menu
         menu.exec(pos)
 
-    def on_editor_text_changed(self):
-        """Handle text changes in the editor"""
-        current_editor = self.get_current_editor()
-        if current_editor:
-            current_index = self.tabWidget.indexOf(current_editor)
-            self.set_tab_background_color(current_index, "changed")
-            self.update_status_bar()  # Update status bar on text change
-
     def reopen_last_closed_file(self):
         """Reopen the last closed file"""
         if self.closed_files:
@@ -1122,13 +1039,16 @@ class MainWindow(QMainWindow):
                     # Open the file and place the cursor at the symbol position
                     editor.open_file_at_line(file_path, line_number, column_position)
     
-    ########## Compile and Execute Handle #############
+    ############################ Compile and Execute Handle #############################
     def clean_handle(self):
         # STM32 Framework Handle
         if self.stm32_handler.project_available:
             self.stm32_handler.project_action("clean")
         else:
-            pass
+            compiler    = CodeCompiler(self.terminal)
+            editor      = self.get_current_editor()
+            file_path   = str(Path(editor.file_path).resolve())
+            compiler.clean(file_path)
 
     def compile_handle(self):
         # STM32 Framework Handle
@@ -1136,40 +1056,21 @@ class MainWindow(QMainWindow):
             self.stm32_handler.project_action("clean_build")
         else:
             # Programming Language Handle
-            editor = self.get_current_editor()
-            file_suffix = Path(editor.file_path).suffix.lower()
-            file_path = str(Path(editor.file_path).resolve())
-
-            if '.py' == file_suffix:
-                self.terminal.add_log("Command", f"python {file_path}")
-                if self.terminal.execute_specific_command(f"python {file_path}"):
-                    self.terminal.add_log("Info", "Python program is executed!")
-            if '.c' == file_suffix:    
-                output_path = str(Path(file_path).with_suffix('.exe'))
-                current_dir = str(Path(file_path).parent)
-                self.terminal.add_log("Command", f"gcc -o {output_path} {file_path} -I {current_dir}")
-                if self.terminal.execute_specific_command(f"gcc -o {output_path} {file_path} -I {current_dir}"):
-                    if Path(output_path).exists():
-                        # Get modification times
-                        exe_mtime = os.path.getmtime(output_path)
-                        src_mtime = os.path.getmtime(file_path)
-                        
-                        if exe_mtime >= src_mtime:
-                            self.terminal.add_log("Info", "Executable is up to date")
-                        else:
-                            self.terminal.add_log("Info", "Source file has changed, recompiling...")
-                    else:
-                        self.terminal.add_log("Info", "C program is executed!")
+            compiler    = CodeCompiler(self.terminal)
+            editor      = self.get_current_editor()
+            file_path   = str(Path(editor.file_path).resolve())
+            compiler.compile(file_path)
 
     def compile_run_handle(self):
-        self.compile_handle()
-        editor = self.get_current_editor()
-        file_path = str(Path(editor.file_path).resolve())
-        exe_path = str(Path(file_path).with_suffix('.exe'))
-        
-        if Path(exe_path).exists():
-            self.terminal.add_log("Command", exe_path)
-            self.terminal.execute_specific_command(exe_path)
+        # STM32 Framework Handle
+        if self.stm32_handler.project_available:
+            self.stm32_handler.project_action("clean_build")
+        else:
+            # Programming Language Handle
+            compiler    = CodeCompiler(self.terminal)
+            editor      = self.get_current_editor()
+            file_path   = str(Path(editor.file_path).resolve())
+            compiler.compile_and_run(file_path)
 
     def flash_handle(self):
         # STM32 Framework Handle
@@ -1177,4 +1078,4 @@ class MainWindow(QMainWindow):
             self.stm32_handler.project_action("flash")
         else:
             pass
-    ##################### STM32 Handler ###########################
+    ################################ STM32 Handler ######################################

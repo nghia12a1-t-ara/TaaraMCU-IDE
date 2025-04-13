@@ -1,5 +1,13 @@
 import os
 import sys
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class Result:
+    success: bool
+    error_code: Optional[str] = None
+    message: Optional[str] = None
 
 def resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
