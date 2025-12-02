@@ -56,9 +56,6 @@ class MainWindow(QMainWindow):
         self._terminal = None
         self._debugger_panel = None
         
-        # State
-        self.current_tab_index = 0
-        
         self._setup_window()
         self._setup_ui()
         
@@ -104,7 +101,29 @@ class MainWindow(QMainWindow):
         self._tab_widget.setTabsClosable(True)
         self._tab_widget.setMovable(True)
         self._main_splitter.addWidget(self._tab_widget)
-        
+        self._tab_widget.tabBar().setStyleSheet("""
+            QTabBar::tab {
+                background: #d8dded;
+                padding: 7px 16px;
+                border: 1px solid #111;
+                border-bottom: none;
+            }
+            QTabBar::tab:selected {
+                background: #e9edd8;
+                font-weight: bold;
+                border: 1px solid #0259bf;
+            }
+            QTabBar::tab:hover {
+                background: #cfd6b2;
+            }
+            QTabBar::tab:!selected {
+                margin-top: 3px;
+            }
+            QTabBar::tab:selected:!active {
+                background: #2a2a2a;
+            }
+        """)
+
         # Set splitter sizes
         self._main_splitter.setSizes([250, 750])
         
@@ -156,6 +175,7 @@ class MainWindow(QMainWindow):
     def _on_editor_changed(self, editor) -> None:
         """Handle editor tab change"""
         self.update_status_bar()
+        print("_on_editor_changed")
         
         # Update function list if available
         if self._function_list and editor:
@@ -519,12 +539,3 @@ class MainWindow(QMainWindow):
         file_path = self._editor_manager.get_current_filepath()
         if file_path:
             self._status_manager.set_message(file_path)
-    
-    def set_tab_background_color(self, index: int, state: str) -> None:
-        """Set tab background color (compatibility method)"""
-        self._editor_manager._set_tab_color(index, state)
-    
-    def _close_tab(self, index: int) -> None:
-        """Close tab at index - delegate to EditorManager"""
-        if hasattr(self, '_editor_manager') and self._editor_manager:
-            self._editor_manager.close_editor(index)

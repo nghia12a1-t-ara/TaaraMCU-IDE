@@ -17,28 +17,16 @@ if TYPE_CHECKING:
 
 
 class EditorManager(QObject):
-    """
-    Manages multiple code editor instances in a tab widget.
+    editor_created = Signal(object)  # CodeEditor - Emitted when a new editor is created
+    editor_closed = Signal(str)      # file_path - Emitted when an editor is closed
+    current_editor_changed = Signal(object)  # CodeEditor - Emitted when the active editor changes
+    file_saved = Signal(str)         # file_path - Emitted when a file is saved (file_path)
+    file_opened = Signal(str)        # file_path - Emitted when a file is opened (file_path)
+    content_modified = Signal()      # any editor modified - Emitted when any editor content is modified
     
-    Signals:
-        editor_created: Emitted when a new editor is created
-        editor_closed: Emitted when an editor is closed
-        current_editor_changed: Emitted when the active editor changes
-        file_saved: Emitted when a file is saved (file_path)
-        file_opened: Emitted when a file is opened (file_path)
-        content_modified: Emitted when any editor content is modified
-    """
-    
-    editor_created = Signal(object)  # CodeEditor
-    editor_closed = Signal(str)      # file_path
-    current_editor_changed = Signal(object)  # CodeEditor
-    file_saved = Signal(str)         # file_path
-    file_opened = Signal(str)        # file_path
-    content_modified = Signal()      # any editor modified
-    
-    TAB_COLOR_SAVED = QColor("#C8E6C9")    # Light green
-    TAB_COLOR_MODIFIED = QColor("#FFCDD2") # Light red
-    TAB_COLOR_DEFAULT = QColor("#FFFFFF")  # White
+    TAB_COLOR_SAVED = QColor("#00AC06")    # Light green
+    TAB_COLOR_MODIFIED = QColor("#D6413A") # Light red
+    TAB_COLOR_DEFAULT = QColor("#0700D2")  # Blue
     
     def __init__(self, parent: 'MainWindow', tab_widget: QTabWidget):
         super().__init__(parent)
@@ -158,15 +146,6 @@ class EditorManager(QObject):
         return editor
     
     def open_editor(self, file_path: Optional[str] = None) -> Optional[CodeEditor]:
-        """
-        Open a file in a new editor tab.
-        
-        Args:
-            file_path: Path to file, or None to show file dialog
-            
-        Returns:
-            The editor instance, or None if cancelled/failed
-        """
         if not file_path:
             file_path, _ = QFileDialog.getOpenFileName(
                 self._parent, 
@@ -174,7 +153,6 @@ class EditorManager(QObject):
                 "",
                 "All Files (*);;C/C++ Files (*.c *.cpp *.h *.hpp);;Python Files (*.py)"
             )
-        
         if not file_path:
             return None
         
@@ -224,15 +202,6 @@ class EditorManager(QObject):
             return None
     
     def save_editor(self, editor: Optional[CodeEditor] = None) -> bool:
-        """
-        Save the current or specified editor.
-        
-        Args:
-            editor: Editor to save, or None for current editor
-            
-        Returns:
-            True if saved successfully
-        """
         editor = editor or self.get_current_editor()
         if not editor or editor not in self.editors:
             return False
@@ -265,15 +234,6 @@ class EditorManager(QObject):
             return False
     
     def save_editor_as(self, editor: Optional[CodeEditor] = None) -> bool:
-        """
-        Save editor with a new file path.
-        
-        Args:
-            editor: Editor to save, or None for current editor
-            
-        Returns:
-            True if saved successfully
-        """
         editor = editor or self.get_current_editor()
         if not editor or editor not in self.editors:
             return False
@@ -312,15 +272,6 @@ class EditorManager(QObject):
         return success
     
     def close_editor(self, index: int) -> bool:
-        """
-        Close the editor at the given tab index.
-        
-        Args:
-            index: Tab index to close
-            
-        Returns:
-            True if closed successfully
-        """
         if index < 0 or index >= self._tab_widget.count():
             return False
         
@@ -443,12 +394,6 @@ class EditorManager(QObject):
     
     def find_text(self, text: str, case_sensitive: bool = False, 
                   whole_word: bool = False, forward: bool = True) -> bool:
-        """
-        Find text in current editor using QScintilla's findFirst/findNext.
-        
-        Returns:
-            True if text was found
-        """
         editor = self.get_current_editor()
         if not editor:
             return False
@@ -500,12 +445,6 @@ class EditorManager(QObject):
     
     def replace_all(self, find_text: str, replace_text: str,
                     case_sensitive: bool = False, whole_word: bool = False) -> int:
-        """
-        Replace all occurrences of find_text.
-        
-        Returns:
-            Number of replacements made
-        """
         editor = self.get_current_editor()
         if not editor:
             return 0
@@ -554,12 +493,6 @@ class EditorManager(QObject):
                 editor.setWhitespaceVisibility(QsciScintilla.WhitespaceVisibility.WsInvisible)
     
     def goto_definition(self, word: str) -> bool:
-        """
-        Go to definition of word using CTags.
-        
-        Returns:
-            True if definition was found and navigated to
-        """
         if not word:
             return False
         

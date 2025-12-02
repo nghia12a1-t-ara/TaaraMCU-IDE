@@ -16,17 +16,8 @@ from taara_ide.utils.resource import resource_path
 
 
 class ThemeManager:
-    """
-    Manages editor themes and syntax highlighting colors.
-    """
-    
+    """ Manages editor themes and syntax highlighting colors """
     def __init__(self, themes_dir: Optional[str] = None):
-        """
-        Initialize theme manager.
-        
-        Args:
-            themes_dir: Path to themes directory, defaults to 'themes' in project root
-        """
         if themes_dir:
             self._themes_dir = Path(themes_dir)
         else:
@@ -36,15 +27,6 @@ class ThemeManager:
         self._theme_name: str = "khaki"
     
     def load_theme(self, theme_name: str) -> bool:
-        """
-        Load a theme from file.
-        
-        Args:
-            theme_name: Name of the theme (without .json extension)
-            
-        Returns:
-            True if loaded successfully
-        """
         theme_file = self._themes_dir / f"{theme_name.lower()}.json"
         
         try:
@@ -386,17 +368,6 @@ class PythonHighlighter(QSyntaxHighlighter):
 
 
 def create_highlighter(language: str, document, theme_manager: ThemeManager) -> QSyntaxHighlighter:
-    """
-    Create a syntax highlighter for the specified language.
-    
-    Args:
-        language: "Python", "CPP", or "C"
-        document: QTextDocument to highlight
-        theme_manager: Theme manager instance
-        
-    Returns:
-        Configured highlighter instance
-    """
     if language.lower() == "python":
         return PythonHighlighter(document, theme_manager)
     else:  # Default to C/C++
