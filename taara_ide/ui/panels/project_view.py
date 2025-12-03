@@ -22,11 +22,13 @@ class ProjectView(QDockWidget):
     Signals:
         file_requested: Emitted when user double-clicks a file
         project_changed: Emitted when project directory changes
+        index_requested: Emitted to request project indexing
     """
     
     file_requested = Signal(str)  # file_path
     project_changed = Signal(str)  # directory
-    
+    index_requested = Signal(str)  # directory to index
+
     def __init__(self, parent: Optional['MainWindow'] = None):
         super().__init__("Project View", parent)
         self._parent = parent
@@ -115,6 +117,8 @@ class ProjectView(QDockWidget):
         # Store and emit signal
         self._current_project_directory = directory
         self.project_changed.emit(directory)
+        
+        self.index_requested.emit(directory)
         
         return True
     

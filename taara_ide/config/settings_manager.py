@@ -190,3 +190,21 @@ class SettingsManager:
     def set_optimization_level(self, level: str) -> None:
         """Set default optimization level"""
         self.set("build/optimization", level)
+    
+    # ========== Session settings ==========
+    
+    def get_open_tabs(self) -> List[str]:
+        """Get list of open tab file paths"""
+        return self.get("session/openTabs", []) or []
+    
+    def set_open_tabs(self, file_paths: List[str]) -> None:
+        """Save list of open tab file paths"""
+        self.set("session/openTabs", file_paths)
+    
+    def get_active_tab_index(self) -> int:
+        """Get active tab index"""
+        return int(self.get("session/activeTabIndex", 0))
+    
+    def set_active_tab_index(self, index: int) -> None:
+        """Set active tab index"""
+        self.set("session/activeTabIndex", index)

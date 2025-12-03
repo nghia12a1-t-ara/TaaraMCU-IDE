@@ -4,6 +4,8 @@ CTags-based code indexer
 import os
 import subprocess
 import json
+import hashlib
+import shutil
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
@@ -11,6 +13,7 @@ from PyQt6.QtCore import QThread, pyqtSignal as Signal
 
 from taara_ide.core.base import IndexerBase
 from taara_ide.config import SettingsManager
+from taara_ide.config.constants import get_ctags_cache_dir
 from taara_ide.utils import Result
 
 
@@ -116,6 +119,33 @@ class CtagsHandler(IndexerBase):
         self._settings = SettingsManager()
         self._worker: Optional[CtagsWorker] = None
         self._symbols_cache: Dict[str, List[Symbol]] = {}
+        self._tags_files: Dict[str, str] = {}  # file_path -> tags_file_path
+        self._cache_dir = get_ctags_cache_dir()
+    
+    def _get_tags_filename(self, source_path: str, is_project: bool = False) -> str:
+        """
+        Generate a unique tags filename based on source path.
+        Uses hash to avoid conflicts and keep names short.
+        """
+        # Normalize path for consistent hashing
+        normalized = os.path.normpath(os.path.abspath(source_path))
+        # Create hash of full path
+        path_hash = hashlib.md5(normalized.encode()).hexdigest()[:12]
+        # Get base name for readability
+        base_name = os.path.basename(normalized)
+        # Remove extension for files
+        if not is_project:
+            base_name = os.path.splitext(base_name)[0]
+        # Sanitize name (remove special chars)
+        safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in base_name)
+        
+        prefix = "project_" if is_project else "file_"
+        return f"{prefix}{safe_name}_{path_hash}.tags"
+    
+    def _get_tags_file_path(self, source_path: str, is_project: bool = False) -> str:
+        """Get full path to tags file in cache directory"""
+        filename = self._get_tags_filename(source_path, is_project)
+        return os.path.join(self._cache_dir, filename)
     
     @property
     def ctags_path(self) -> str:
@@ -142,6 +172,11 @@ class CtagsHandler(IndexerBase):
             self.ctags_path_required.emit()
             return []
         
+        tags_file = self._get_tags_file_path(file_path, is_project=False)
+        
+        # Track tags file for cleanup
+        self._tags_files[file_path] = tags_file
+        
         try:
             result = subprocess.run(
                 [
@@ -150,7 +185,7 @@ class CtagsHandler(IndexerBase):
                     '--fields=+nKS',
                     '--kinds-c=+p',
                     '--kinds-c++=+p',
-                    '-f', '-',
+                    '-f', tags_file,
                     file_path
                 ],
                 capture_output=True,
@@ -161,14 +196,33 @@ class CtagsHandler(IndexerBase):
                 return []
             
             symbols = []
-            for line in result.stdout.strip().split('\n'):
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    symbols.append(data)
-                except json.JSONDecodeError:
-                    continue
+            if os.path.exists(tags_file):
+                with open(tags_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        if line.startswith('!_TAG_'):
+                            continue
+                        try:
+                            # Parse ctags format: name\tfile\tpattern;\tfields
+                            parts = line.split('\t')
+                            if len(parts) >= 3:
+                                symbol_data = {
+                                    'name': parts[0],
+                                    'file': file_path,
+                                    'line': 1
+                                }
+                                # Extract additional fields
+                                for part in parts[3:]:
+                                    if ':' in part:
+                                        key, value = part.split(':', 1)
+                                        if key == 'line':
+                                            symbol_data['line'] = int(value)
+                                        elif key == 'kind':
+                                            symbol_data['kind'] = value
+                                        elif key == 'signature':
+                                            symbol_data['signature'] = value
+                                symbols.append(symbol_data)
+                        except Exception:
+                            continue
             
             return symbols
             
@@ -214,14 +268,18 @@ class CtagsHandler(IndexerBase):
             self.ctags_path_required.emit()
             return False
         
-        tags_file = os.path.join(project_path, 'tags')
+        tags_file = self._get_tags_file_path(project_path, is_project=True)
+        
+        # Track tags file for cleanup
+        self._tags_files[project_path] = tags_file
         
         try:
             result = subprocess.run(
                 [
                     self.ctags_path,
                     '-R',
-                    '--fields=+nKS',
+                    '--fields=+nKSz',
+                    '--extras=+q',
                     '--kinds-c=+p',
                     '--kinds-c++=+p',
                     '-f', tags_file,
@@ -237,34 +295,112 @@ class CtagsHandler(IndexerBase):
             return False
     
     def find_definition(self, symbol: str, context_file: str) -> Optional[tuple]:
-        """Find symbol definition
-        
-        Returns:
-            Tuple of (file_path, line, column) or None if not found
-        """
-        # First check cache
+        """Find definition of symbol, searching cache first then tags files"""
+        # Search in cache first
         for file_path, symbols in self._symbols_cache.items():
             for sym in symbols:
                 if sym.name == symbol:
-                    return (sym.file, sym.line, 0)
+                    column = self._find_column_in_file(sym.file, sym.line, symbol)
+                    return (sym.file, sym.line, column)
         
-        # Fallback to searching project tags file
-        project_dir = os.path.dirname(context_file)
-        tags_file = os.path.join(project_dir, 'tags')
+        # First try to find project tags file for context file's project
+        context_dir = os.path.dirname(os.path.abspath(context_file))
         
-        if os.path.exists(tags_file):
+        # Look for project root (has .taara_project or is in tracked projects)
+        project_root = None
+        current_dir = context_dir
+        max_depth = 10
+        
+        for _ in range(max_depth):
+            if os.path.exists(os.path.join(current_dir, '.taara_project')):
+                project_root = current_dir
+                break
+            parent = os.path.dirname(current_dir)
+            if parent == current_dir:
+                break
+            current_dir = parent
+        
+        # Search in all tracked tags files
+        tags_files_to_search = []
+        
+        # Add project tags file if found
+        if project_root and project_root in self._tags_files:
+            tags_files_to_search.append((self._tags_files[project_root], project_root))
+        
+        # Also search all project tags files in cache
+        for source_path, tags_file in self._tags_files.items():
+            if os.path.isdir(source_path) and tags_file not in [t[0] for t in tags_files_to_search]:
+                tags_files_to_search.append((tags_file, source_path))
+        
+        for tags_file, base_path in tags_files_to_search:
+            if not os.path.exists(tags_file):
+                continue
+            
             try:
-                with open(tags_file, 'r') as f:
+                with open(tags_file, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
-                        if line.startswith(symbol + '\t'):
-                            parts = line.split('\t')
-                            if len(parts) >= 3:
-                                file = parts[1]
-                                return (file, 1, 0)
-            except Exception:
-                pass
+                        if line.startswith('!_TAG_'):
+                            continue
+                        
+                        parts = line.split('\t')
+                        if len(parts) >= 3 and parts[0] == symbol:
+                            relative_file = parts[1]
+                            
+                            # Build absolute path
+                            if os.path.isabs(relative_file):
+                                abs_file = relative_file
+                            else:
+                                abs_file = os.path.normpath(os.path.join(base_path, relative_file))
+                            
+                            line_num = 1
+                            
+                            # Extract line number
+                            for part in parts[3:]:
+                                part = part.strip()
+                                if part.startswith('line:'):
+                                    try:
+                                        line_num = int(part.split(':')[1])
+                                        break
+                                    except (ValueError, IndexError):
+                                        pass
+                            
+                            column = self._find_column_in_file(abs_file, line_num, symbol)
+                            return (abs_file, line_num, column)
+            except Exception as e:
+                print(f"[CTags] Error parsing tags file {tags_file}: {e}")
         
         return None
+    
+    def _find_column_in_file(self, file_path: str, line_num: int, symbol: str) -> int:
+        """
+        Find the column position of symbol in the specified line of file.
+        Returns 0 if not found.
+        """
+        try:
+            if not os.path.exists(file_path):
+                return 0
+            
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for i, line in enumerate(f, 1):
+                    if i == line_num:
+                        # Find symbol position in line
+                        # Try to find whole word match
+                        import re
+                        pattern = r'\b' + re.escape(symbol) + r'\b'
+                        match = re.search(pattern, line)
+                        if match:
+                            return match.start()
+                        
+                        # Fallback: simple find
+                        pos = line.find(symbol)
+                        if pos >= 0:
+                            return pos
+                        
+                        break
+        except Exception as e:
+            print(f"[CTags] Error finding column: {e}")
+        
+        return 0
     
     def find_references(self, symbol: str, project_path: str) -> List[tuple]:
         """Find all references to symbol"""
@@ -278,3 +414,59 @@ class CtagsHandler(IndexerBase):
     def clear_cache(self) -> None:
         """Clear symbol cache"""
         self._symbols_cache.clear()
+    
+    def cleanup_file_tags(self, file_path: str) -> None:
+        """Remove tags file for a specific file"""
+        if file_path in self._tags_files:
+            tags_file = self._tags_files[file_path]
+            try:
+                if os.path.exists(tags_file):
+                    os.remove(tags_file)
+                    print(f"[CTags] Cleaned up tags file: {tags_file}")
+            except Exception as e:
+                print(f"[CTags] Failed to remove tags file: {e}")
+            del self._tags_files[file_path]
+        
+        if file_path in self._symbols_cache:
+            del self._symbols_cache[file_path]
+    
+    def cleanup_project_tags(self, project_path: str) -> None:
+        """Remove tags file for entire project"""
+        if project_path in self._tags_files:
+            tags_file = self._tags_files[project_path]
+            try:
+                if os.path.exists(tags_file):
+                    os.remove(tags_file)
+                    print(f"[CTags] Cleaned up project tags file: {tags_file}")
+            except Exception as e:
+                print(f"[CTags] Failed to remove project tags file: {e}")
+            del self._tags_files[project_path]
+        
+        self.clear_cache()
+    
+    def cleanup_all_tags(self) -> None:
+        """Clean up all tracked tags files and entire cache directory"""
+        # Remove tracked files
+        for file_path in list(self._tags_files.keys()):
+            tags_file = self._tags_files[file_path]
+            try:
+                if os.path.exists(tags_file):
+                    os.remove(tags_file)
+            except Exception:
+                pass
+        
+        self._tags_files.clear()
+        self.clear_cache()
+        
+        try:
+            if os.path.exists(self._cache_dir):
+                for filename in os.listdir(self._cache_dir):
+                    file_path = os.path.join(self._cache_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                    except Exception:
+                        pass
+                print(f"[CTags] Cleaned up cache directory: {self._cache_dir}")
+        except Exception as e:
+            print(f"[CTags] Error cleaning cache directory: {e}")

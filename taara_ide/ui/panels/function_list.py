@@ -1,7 +1,6 @@
 """
 Function List Panel - Displays functions and variables in current file.
 """
-
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, 
     QTreeWidget, QTreeWidgetItem, QLineEdit
@@ -18,13 +17,6 @@ if TYPE_CHECKING:
 
 
 class FunctionList(QDockWidget):
-    """
-    Panel displaying functions and variables from current file.
-    
-    Signals:
-        symbol_selected: Emitted when user selects a symbol (file_path, line, column)
-    """
-    
     symbol_selected = Signal(str, int, int)  # file_path, line, column
     
     def __init__(self, parent: Optional['MainWindow'] = None):
@@ -66,11 +58,10 @@ class FunctionList(QDockWidget):
         
         self.setWidget(main_widget)
         
-        self._all_items: List[Dict[str, Any]] = []
+        self._all_items: List[Any] = []
     
     def _connect_signals(self):
         """Connect internal signals."""
-        self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._tree.itemClicked.connect(self._on_item_clicked)
         self.visibilityChanged.connect(self._on_visibility_changed)
     
@@ -81,14 +72,7 @@ class FunctionList(QDockWidget):
             file_path, line_number, col = data
             editor = self._parent.editor_manager.get_current_editor()
             if editor:
-                editor.goto_line(line_number, col)
-    
-    def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int):
-        """Handle double-click on item."""
-        data = item.data(0, Qt.ItemDataRole.UserRole)
-        if data:
-            file_path, line_number, column = data
-            self.symbol_selected.emit(file_path, line_number, column)
+                editor.goto_line_and_select(line_number - 1)
     
     def _on_visibility_changed(self, visible: bool):
         """Handle visibility change for action sync."""
@@ -119,14 +103,7 @@ class FunctionList(QDockWidget):
     
     # ========== Public API ==========
     
-    def update_symbols(self, symbols: List[Dict[str, Any]]):
-        """
-        Update the function list with new symbols.
-        
-        Args:
-            symbols: List of symbol dictionaries with keys:
-                     name, kind, line, signature (optional)
-        """
+    def update_symbols(self, symbols: List[Any]):
         self._tree.clear()
         self._all_items = symbols
         
@@ -154,10 +131,16 @@ class FunctionList(QDockWidget):
         
         # Populate symbols
         for symbol in symbols:
-            name = symbol.get('name', '')
-            kind = symbol.get('kind', 'other')
-            line = symbol.get('line', 0)
-            signature = symbol.get('signature', '')
+            if hasattr(symbol, '__dict__'):  # Symbol dataclass
+                name = symbol.name
+                kind = symbol.kind
+                line = symbol.line
+                signature = getattr(symbol, 'signature', '')
+            else:  # dict
+                name = symbol.get('name', '')
+                kind = symbol.get('kind', 'other')
+                line = symbol.get('line', 0)
+                signature = symbol.get('signature', '')
             
             # Get category
             category = categories.get(kind, categories['other'])

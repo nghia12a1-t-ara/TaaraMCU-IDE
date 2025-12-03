@@ -20,7 +20,6 @@ class CodeLogic:
     Handles code analysis operations like goto definition, tags parsing.
     Separated from CodeEditor for better testability.
     """
-    
     def __init__(self, editor: 'CodeEditor'):
         self._editor = editor
         self.tags_cache: Dict[str, Tuple[str, int, int]] = {}  # symbol -> (file, line, col)
@@ -38,57 +37,6 @@ class CodeLogic:
         if self._editor.GUI and hasattr(self._editor.GUI, 'project_view'):
             return self._editor.GUI.project_view
         return None
-    
-    def goto_definition(self, word: str) -> Result:
-        """
-        Find and navigate to the definition of a symbol.
-        
-        Args:
-            word: The symbol to find
-            
-        Returns:
-            Result indicating success or failure
-        """
-        editor_man = self._editor_manager
-        if not editor_man:
-            return Result(success=False, error_code="Error", message="Editor manager not available")
-        
-        # Get current file path
-        file_path = editor_man.get_current_filepath()
-        if not file_path:
-            return Result(
-                success=False, 
-                error_code="CTags Error", 
-                message="No file path available for this editor!"
-            )
-        
-        # Determine tag files to use
-        file_tag = f"{file_path}.tags"
-        project_dir = self._project_view.get_project_directory() if self._project_view else None
-        project_tag = str(Path(project_dir) / "project.tags") if project_dir else None
-        
-        # Check if we need to update tags cache
-        cur_editor = editor_man.get_current_editor()
-        editor_info = editor_man.editors.get(cur_editor, {})
-        
-        if editor_info.get("modified") or not self.tags_cache:
-            tag_files = [file_tag]
-            if project_tag and os.path.exists(project_tag):
-                tag_files.append(project_tag)
-            self.update_tags_cache(tag_files)
-        
-        # Search for definition
-        definition = self.tags_cache.get(word)
-        if definition:
-            def_file, line_number, column = definition
-            self._open_file_at_line(def_file, line_number, column)
-            return Result(success=True)
-        
-        return Result(
-            success=False, 
-            error_code="CTags", 
-            message=f"Definition for '{word}' not found!"
-        )
     
     def _open_file_at_line(self, file_path: str, line_number: int, column: int = 0):
         """Open a file and navigate to specific line and column."""
@@ -117,12 +65,6 @@ class CodeLogic:
             editor.goto_line(line_number, column)
     
     def update_tags_cache(self, tag_files: List[str]):
-        """
-        Update the tags cache from multiple .tags files.
-        
-        Args:
-            tag_files: List of paths to .tags files
-        """
         self.tags_cache.clear()
         
         for tag_file in tag_files:

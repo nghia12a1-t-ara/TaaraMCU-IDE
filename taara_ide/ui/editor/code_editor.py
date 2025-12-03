@@ -3,7 +3,7 @@ Code Editor - QScintilla-based code editor widget.
 Professional syntax highlighting and code editing features.
 """
 
-from PyQt6.Qsci import QsciScintilla, QsciLexerCPP, QsciLexerPython
+from PyQt6.Qsci import QsciScintilla, QsciLexerCPP, QsciLexerPython, QsciAPIs
 from PyQt6.QtGui import QFont, QColor, QMouseEvent
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtWidgets import QMessageBox
@@ -474,6 +474,14 @@ class CodeEditor(QsciScintilla):
         """Navigate to specific line and column."""
         self.setCursorPosition(line_number - 1, column)
         self.ensureLineVisible(line_number - 1)
+
+    def goto_line_and_select(self, line_number: int):
+        if line_number < 0 or line_number >= self.lines():
+            return
+        start_pos = self.SendScintilla(self.SCI_POSITIONFROMLINE, line_number)
+        end_pos = self.SendScintilla(self.SCI_GETLINEENDPOSITION, line_number)
+        self.SendScintilla(self.SCI_SETSEL, start_pos, end_pos)
+        self.ensureLineVisible(line_number)
     
     def open_file(self, file_path: str) -> bool:
         """Open a file in the editor."""

@@ -3,9 +3,9 @@ Editor Manager - Manages multiple QScintilla editor tabs.
 """
 
 from PyQt6.QtWidgets import QMessageBox, QFileDialog, QTabWidget
-from PyQt6.QtCore import pyqtSignal as Signal, QObject
-from PyQt6.QtGui import QColor
-from PyQt6.Qsci import QsciScintilla
+from PyQt6.QtCore import QObject, pyqtSignal as Signal, Qt, QEvent
+from PyQt6.QtGui import QTextCursor, QColor
+from PyQt6.Qsci import QsciAPIs, QsciScintilla
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Set, TYPE_CHECKING
 
@@ -57,6 +57,24 @@ class EditorManager(QObject):
         
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
         self._tab_widget.tabCloseRequested.connect(self._on_close_tab_requested)
+        
+        self._tab_widget.tabBar().installEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        """Handle middle mouse button click to close tabs"""
+        try:
+            if obj == self._tab_widget.tabBar() and self._tab_widget.tabBar():
+                if event.type() == event.Type.MouseButtonPress:
+                    if event.button() == Qt.MouseButton.MiddleButton:
+                        # Get tab index at click position
+                        index = self._tab_widget.tabBar().tabAt(event.pos())
+                        if index >= 0:
+                            self.close_editor(index)
+                            return True
+        except RuntimeError:
+            # Widget has been deleted, ignore
+            pass
+        return super().eventFilter(obj, event)
     
     # ========== Untitled Management (Notepad++ style) ==========
     
@@ -125,8 +143,15 @@ class EditorManager(QObject):
     
     # ========== Editor Operations ==========
     
-    def new_editor(self) -> CodeEditor:
-        """Create a new empty editor with numbered Untitled name."""
+    def new_editor(self, skip_if_has_editors: bool = False) -> CodeEditor:
+        """Create a new empty editor with numbered Untitled name.
+        
+        Args:
+            skip_if_has_editors: If True, don't create if any editors exist
+        """
+        if skip_if_has_editors and self._tab_widget.count() > 0:
+            return None
+            
         editor = CodeEditor(self._parent)
         self._connect_editor_signals(editor)
         
@@ -143,6 +168,7 @@ class EditorManager(QObject):
         
         self._tab_widget.setCurrentWidget(editor)
         self.editor_created.emit(editor)
+        
         return editor
     
     def open_editor(self, file_path: Optional[str] = None) -> Optional[CodeEditor]:
@@ -272,6 +298,7 @@ class EditorManager(QObject):
         return success
     
     def close_editor(self, index: int) -> bool:
+        """Close editor at specified index."""
         if index < 0 or index >= self._tab_widget.count():
             return False
         
@@ -310,7 +337,7 @@ class EditorManager(QObject):
             self._closed_files.append(file_path)
             if len(self._closed_files) > self._max_closed_files:
                 self._closed_files.pop(0)
-            self._ctags_handler.clear_cache()
+            self._ctags_handler.cleanup_file_tags(file_path)
         
         # Remove tab and editor tracking
         self._tab_widget.removeTab(index)
@@ -476,8 +503,7 @@ class EditorManager(QObject):
         """Toggle word wrap in current editor."""
         editor = self.get_current_editor()
         if editor:
-            current = editor.wrapMode()
-            if current == QsciScintilla.WrapMode.WrapNone:
+            if editor.wrapMode() == QsciScintilla.WrapMode.WrapNone:
                 editor.setWrapMode(QsciScintilla.WrapMode.WrapWord)
             else:
                 editor.setWrapMode(QsciScintilla.WrapMode.WrapNone)
@@ -486,8 +512,7 @@ class EditorManager(QObject):
         """Toggle whitespace visibility in current editor."""
         editor = self.get_current_editor()
         if editor:
-            current = editor.whitespaceVisibility()
-            if current == QsciScintilla.WhitespaceVisibility.WsInvisible:
+            if editor.whitespaceVisibility() == QsciScintilla.WhitespaceVisibility.WsInvisible:
                 editor.setWhitespaceVisibility(QsciScintilla.WhitespaceVisibility.WsVisible)
             else:
                 editor.setWhitespaceVisibility(QsciScintilla.WhitespaceVisibility.WsInvisible)
@@ -495,22 +520,19 @@ class EditorManager(QObject):
     def goto_definition(self, word: str) -> bool:
         if not word:
             return False
-        
-        # Get current file path
         current_path = self.get_current_filepath()
         if not current_path:
             return False
         
-        # Search in CTags cache
         definition = self._ctags_handler.find_definition(word, current_path)
         if definition:
+            print(f"[EditorManager] Going to definition of '{word}': {definition}")
             if len(definition) == 2:
                 file_path, line = definition
                 column = 0
             else:
                 file_path, line, column = definition
-            self.open_file_at_line(file_path, line, column)
-            return True
+            return self.open_file_at_line(file_path, line, column)
         
         QMessageBox.information(
             self._parent, "Go to Definition",
@@ -572,11 +594,28 @@ class EditorManager(QObject):
         return None
     
     def get_modified_editors(self) -> List[CodeEditor]:
-        """Get all modified editors."""
-        return [e for e, info in self.editors.items() if info["modified"]]
+        """Get all editors with unsaved changes"""
+        modified = []
+        for i in range(self._tab_widget.count()):
+            editor = self._tab_widget.widget(i)
+            if editor and editor.isModified():
+                modified.append(editor)
+        return modified
+    
+    def get_open_file_paths(self) -> List[str]:
+        """Get list of all open file paths (excluding Untitled tabs)"""
+        file_paths = []
+        for i in range(self._tab_widget.count()):
+            editor = self._tab_widget.widget(i)
+            if editor:
+                file_path = editor.file_path
+                # Only save real files, not Untitled tabs
+                if file_path and not file_path.startswith("Untitled"):
+                    file_paths.append(file_path)
+        return file_paths
     
     def has_unsaved_changes(self) -> bool:
-        """Check if any editor has unsaved changes."""
+        """Check if any editor has unsaved changes"""
         return len(self.get_modified_editors()) > 0
     
     def get_current_line_count(self) -> int:
@@ -637,6 +676,8 @@ class EditorManager(QObject):
                     symbols = self._ctags_handler.get_cached_symbols(file_path)
                     if hasattr(self._parent._function_list, 'update_symbols'):
                         self._parent._function_list.update_symbols(symbols)
+            
+            self._update_autocomplete_with_ctags(editor)
     
     def _on_close_tab_requested(self, index: int) -> None:
         """Handle tab close request from QTabWidget signal"""
@@ -687,3 +728,23 @@ class EditorManager(QObject):
             editor.set_language("CPP")
         else:
             editor.set_language("CPP")
+    
+    def _update_autocomplete_with_ctags(self, editor: CodeEditor) -> None:
+        """Update autocomplete with CTags symbols."""
+        file_path = self.get_current_filepath()
+        if file_path:
+            symbols = self._ctags_handler.get_cached_symbols(file_path)
+            apis = QsciAPIs(editor.lexer)
+            
+            for symbol in symbols:
+                # Build autocomplete entry with signature if available
+                if hasattr(symbol, 'name'):
+                    entry = symbol.name
+                    if hasattr(symbol, 'signature') and symbol.signature:
+                        entry += symbol.signature
+                    apis.add(entry)
+                elif isinstance(symbol, str):
+                    apis.add(symbol)
+            
+            apis.prepare()
+            editor.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)

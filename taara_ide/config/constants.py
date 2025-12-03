@@ -1,8 +1,30 @@
 """
 Application constants and default values
 """
+import os
 from dataclasses import dataclass
 from typing import Dict, List
+
+
+def get_ide_root() -> str:
+    """Get the IDE root directory"""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_cache_dir() -> str:
+    """Get the cache directory path, create if not exists"""
+    cache_dir = os.path.join(get_ide_root(), '.cache')
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    return cache_dir
+
+
+def get_ctags_cache_dir() -> str:
+    """Get the ctags cache directory path, create if not exists"""
+    ctags_dir = os.path.join(get_cache_dir(), 'ctags')
+    if not os.path.exists(ctags_dir):
+        os.makedirs(ctags_dir)
+    return ctags_dir
 
 
 @dataclass(frozen=True)
@@ -21,6 +43,10 @@ class AppConstants:
     THEMES_DIR: str = "themes"
     ICONS_DIR: str = "icons"
     TEMPLATES_DIR: str = "templates"
+    
+    IDE_ROOT: str = get_ide_root()
+    CACHE_DIR: str = get_cache_dir()
+    CTAGS_CACHE_DIR: str = get_ctags_cache_dir()
 
 
 @dataclass(frozen=True)
