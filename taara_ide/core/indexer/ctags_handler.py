@@ -3,9 +3,10 @@ CTags-based code indexer
 """
 import os
 import subprocess
+import sys
 import json
 import hashlib
-import shutil
+import re
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
@@ -15,6 +16,15 @@ from taara_ide.core.base import IndexerBase
 from taara_ide.config import SettingsManager
 from taara_ide.config.constants import get_ctags_cache_dir
 from taara_ide.utils import Result
+
+
+def get_subprocess_flags() -> dict:
+    """Get platform-specific subprocess flags to hide console window"""
+    flags = {}
+    if sys.platform == 'win32':
+        # Prevent console window from appearing on Windows
+        flags['creationflags'] = subprocess.CREATE_NO_WINDOW
+    return flags
 
 
 @dataclass
@@ -76,7 +86,8 @@ class CtagsWorker(QThread):
                     self.file_path
                 ],
                 capture_output=True,
-                text=True
+                text=True,
+                **get_subprocess_flags()
             )
             
             if result.returncode != 0:
@@ -157,7 +168,8 @@ class CtagsHandler(IndexerBase):
             result = subprocess.run(
                 [self.ctags_path, '--version'],
                 capture_output=True,
-                text=True
+                text=True,
+                **get_subprocess_flags()
             )
             return result.returncode == 0
         except Exception:
@@ -189,7 +201,8 @@ class CtagsHandler(IndexerBase):
                     file_path
                 ],
                 capture_output=True,
-                text=True
+                text=True,
+                **get_subprocess_flags()
             )
             
             if result.returncode != 0:
@@ -286,7 +299,8 @@ class CtagsHandler(IndexerBase):
                     project_path
                 ],
                 capture_output=True,
-                text=True
+                text=True,
+                **get_subprocess_flags()
             )
             
             return result.returncode == 0
@@ -385,7 +399,6 @@ class CtagsHandler(IndexerBase):
                     if i == line_num:
                         # Find symbol position in line
                         # Try to find whole word match
-                        import re
                         pattern = r'\b' + re.escape(symbol) + r'\b'
                         match = re.search(pattern, line)
                         if match:

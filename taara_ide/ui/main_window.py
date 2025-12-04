@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
         
         # Set window icon if available
         try:
-            self.setWindowIcon(QIcon(resource_path("icons/app_icon.png")))
+            self.setWindowIcon(QIcon(resource_path("icons/logoIcon.ico")))
         except Exception:
             pass
     
@@ -210,18 +210,16 @@ class MainWindow(QMainWindow):
             }
         """)
         
+
         self._right_panel = QWidget()
         right_layout = QVBoxLayout(self._right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
         self._function_list = FunctionList(self)
-        self._function_list.setTitleBarWidget(QWidget())
-        self._function_list.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         right_layout.addWidget(self._function_list)
         
         self._center_splitter.addWidget(self._right_panel)
-
-        # Show function list by default
+        
         right_panel_visible = self._settings_manager.get_right_panel_width() != 0
         self._right_panel.setVisible(right_panel_visible)
         self._actions.set_checked("view.function_list", right_panel_visible)
@@ -655,7 +653,6 @@ class MainWindow(QMainWindow):
     def _restore_state(self) -> None:
         """Restore window state from settings"""
         
-        # Restore geometry and state
         geometry = self._settings_manager.get_window_geometry()
         if geometry:
             self.restoreGeometry(geometry)
@@ -664,48 +661,60 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
         
+        self._saved_sidebar_width = self._settings_manager.get_sidebar_width()
+        self._saved_right_panel_width = self._settings_manager.get_right_panel_width()
+        
         main_sizes = self._settings_manager.get_main_splitter_sizes()
         if main_sizes and len(main_sizes) == 2:
             self._main_splitter.setSizes(main_sizes)
+            # Update sidebar visibility based on actual size
+            if main_sizes[0] == 0:
+                self._sidebar_stack.setVisible(False)
+        else:
+            # Default sizes if not saved
+            self._main_splitter.setSizes([self._saved_sidebar_width, 750])
         
         center_sizes = self._settings_manager.get_right_splitter_sizes()
         if center_sizes and len(center_sizes) == 2:
             self._center_splitter.setSizes(center_sizes)
-        
-        right_panel_width = self._settings_manager.get_right_panel_width()
-        if right_panel_width == 0:
-            self._right_panel.setVisible(False)
-            self._actions.set_checked("view.function_list", False)
+            # Update right panel visibility based on actual size
+            right_panel_visible = center_sizes[1] > 0
+            self._right_panel.setVisible(right_panel_visible)
+            self._actions.set_checked("view.function_list", right_panel_visible)
         else:
-            self._right_panel.setVisible(True)
-            self._actions.set_checked("view.function_list", True)
+            # Default sizes if not saved
+            if self._saved_right_panel_width > 0:
+                self._center_splitter.setSizes([600, self._saved_right_panel_width])
+                self._right_panel.setVisible(True)
+                self._actions.set_checked("view.function_list", True)
+            else:
+                self._center_splitter.setSizes([800, 0])
+                self._right_panel.setVisible(False)
+                self._actions.set_checked("view.function_list", False)
         
-        # Restore last project
         last_project = self._settings_manager.get_last_project()
-        if last_project and Path(last_project).exists():
-            project_result = self._project_service.open_project(last_project)
-            if project_result.success:
-                self._on_project_opened(last_project)
+        if last_project and os.path.exists(last_project):
+            self._project_view.set_project_directory(last_project)
+            if self._search_panel:
+                self._search_panel.set_project_path(last_project)
+            
+            folder_name = os.path.basename(last_project)
+            self.setWindowTitle(f"{folder_name} - {AppConstants.APP_NAME} - {AppConstants.VERSION}")
         
-        # Restore open tabs
         open_tabs = self._settings_manager.get_open_tabs()
         active_index = self._settings_manager.get_active_tab_index()
         
-        restored_count = 0
+        tabs_restored = 0
         for file_path in open_tabs:
-            if Path(file_path).exists():
+            if os.path.exists(file_path):
                 self._editor_manager.open_editor(file_path)
-                restored_count += 1
+                tabs_restored += 1
         
-        # Only create Untitled if no tabs were restored
-        if restored_count == 0:
-            self._editor_manager.new_editor()
-        elif active_index >= 0 and active_index < self._tab_widget.count():
+        if tabs_restored > 0 and 0 <= active_index < self._tab_widget.count():
             self._tab_widget.setCurrentIndex(active_index)
     
     def _save_state(self) -> None:
         """Save window state to settings"""
-        # Cleanup all CTags files before saving
         print("[main_window] Cleaning up all CTags files...")
         if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
             self._editor_manager.ctags_handler.cleanup_all_tags()
@@ -716,28 +725,16 @@ class MainWindow(QMainWindow):
         self._settings_manager.set_main_splitter_sizes(self._main_splitter.sizes())
         self._settings_manager.set_right_splitter_sizes(self._center_splitter.sizes())
         
-        if self._right_panel.isVisible():
-            # Save actual width when visible
-            width = self._center_splitter.sizes()[1] if len(self._center_splitter.sizes()) > 1 else 200
-            self._settings_manager.set_right_panel_width(width)
-        else:
-            # Save 0 to indicate hidden
-            self._settings_manager.set_right_panel_width(0)
+        self._settings_manager.set_sidebar_width(self._saved_sidebar_width)
+        self._settings_manager.set_right_panel_width(self._saved_right_panel_width)
         
-        # Save current project
-        if self._project_service.path:
-            self._settings_manager.set_last_project(self._project_service.path)
-        
-        # Save open tabs
-        open_files = self._editor_manager.get_open_file_paths()
-        self._settings_manager.set_open_tabs(open_files)
-        
-        # Save active tab index
-        current_index = self._tab_widget.currentIndex()
-        self._settings_manager.set_active_tab_index(current_index)
-        
-        self._settings_manager.sync()
-    
+        if hasattr(self, '_editor_manager'):
+            open_tabs = self._editor_manager.get_open_file_paths()
+            self._settings_manager.set_open_tabs(open_tabs)
+            
+            active_index = self._tab_widget.currentIndex()
+            self._settings_manager.set_active_tab_index(active_index)
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close"""
         if self._editor_manager.has_unsaved_changes():
@@ -802,66 +799,45 @@ class MainWindow(QMainWindow):
     
     def _toggle_project_panel(self, checked: bool = None) -> None:
         """Toggle project panel visibility"""
-        if checked is not None:
-            visible = checked
-        else:
-            visible = not self._sidebar_stack.isVisible()
+        if checked is None:
+            checked = not self._sidebar_stack.isVisible()
         
-        if visible:
-            # Restore saved width
-            current_sizes = self._main_splitter.sizes()
-            if len(current_sizes) >= 2:
-                activity_bar_width = current_sizes[0]  # Activity bar is fixed
-                remaining = sum(current_sizes[1:])
-                self._main_splitter.setSizes([
-                    activity_bar_width,
-                    self._saved_sidebar_width,
-                    remaining - self._saved_sidebar_width
-                ])
+        if checked:
+            # Show sidebar
             self._sidebar_stack.setVisible(True)
+            sizes = self._main_splitter.sizes()
+            total = sum(sizes)
+            self._main_splitter.setSizes([self._saved_sidebar_width, total - self._saved_sidebar_width])
         else:
-            # Save current width before hiding
-            current_sizes = self._main_splitter.sizes()
-            if len(current_sizes) >= 2 and current_sizes[1] > 0:
-                self._saved_sidebar_width = current_sizes[1]
+            # Hide sidebar
+            sizes = self._main_splitter.sizes()
+            if sizes[0] > 0:
+                self._saved_sidebar_width = sizes[0]
             self._sidebar_stack.setVisible(False)
-            # Collapse to 0
-            if len(current_sizes) >= 2:
-                activity_bar_width = current_sizes[0]
-                remaining = sum(current_sizes[1:])
-                self._main_splitter.setSizes([activity_bar_width, 0, remaining])
+            self._main_splitter.setSizes([0, sum(sizes)])
         
-        self._actions.set_checked("view.project_panel", visible)
-    
+        self._actions.set_checked("view.project_panel", checked)
+
     def _toggle_function_list(self, checked: bool = None) -> None:
-        """Toggle function list visibility"""
-        if checked is not None:
-            visible = checked
-        else:
-            visible = not self._right_panel.isVisible()
+        """Toggle function list panel visibility"""
+        if checked is None:
+            checked = not self._right_panel.isVisible()
         
-        if visible:
-            # Restore saved width
-            current_sizes = self._center_splitter.sizes()
-            if len(current_sizes) == 2:
-                total = sum(current_sizes)
-                self._center_splitter.setSizes([
-                    total - self._saved_right_panel_width,
-                    self._saved_right_panel_width
-                ])
+        if checked:
+            # Show function list
             self._right_panel.setVisible(True)
+            sizes = self._center_splitter.sizes()
+            total = sum(sizes)
+            self._center_splitter.setSizes([total - self._saved_right_panel_width, self._saved_right_panel_width])
         else:
-            # Save current width before hiding
-            current_sizes = self._center_splitter.sizes()
-            if len(current_sizes) == 2 and current_sizes[1] > 0:
-                self._saved_right_panel_width = current_sizes[1]
+            # Hide function list
+            sizes = self._center_splitter.sizes()
+            if len(sizes) > 1 and sizes[1] > 0:
+                self._saved_right_panel_width = sizes[1]
             self._right_panel.setVisible(False)
-            # Collapse to 0
-            if len(current_sizes) == 2:
-                total = sum(current_sizes)
-                self._center_splitter.setSizes([total, 0])
+            self._center_splitter.setSizes([sum(sizes), 0])
         
-        self._actions.set_checked("view.function_list", visible)
+        self._actions.set_checked("view.function_list", checked)
     
     def _toggle_terminal(self, checked: bool = None) -> None:
         """Toggle terminal dock visibility"""

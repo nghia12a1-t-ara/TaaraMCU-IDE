@@ -2,11 +2,21 @@
 Process and subprocess utilities
 """
 import subprocess
+import sys
 import os
 import signal
 from typing import Optional, List, Dict, Callable
 from dataclasses import dataclass
 from taara_ide.utils.resource import Result
+
+
+def get_subprocess_flags() -> dict:
+    """Get platform-specific subprocess flags to hide console window"""
+    flags = {}
+    if sys.platform == 'win32':
+        # Prevent console window from appearing on Windows
+        flags['creationflags'] = subprocess.CREATE_NO_WINDOW
+    return flags
 
 
 @dataclass
@@ -55,7 +65,8 @@ class ProcessUtils:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                shell=shell
+                shell=shell,
+                **get_subprocess_flags()
             )
             
             result = ProcessResult(
@@ -102,7 +113,8 @@ class ProcessUtils:
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
             text=True,
-            shell=shell
+            shell=shell,
+            **get_subprocess_flags()
         )
     
     @staticmethod
@@ -110,8 +122,11 @@ class ProcessUtils:
         """Kill a process and all its children"""
         try:
             if os.name == 'nt':  # Windows
-                subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], 
-                             capture_output=True)
+                subprocess.run(
+                    ['taskkill', '/F', '/T', '/PID', str(pid)], 
+                    capture_output=True,
+                    **get_subprocess_flags()
+                )
             else:  # Unix
                 os.killpg(os.getpgid(pid), signal.SIGTERM)
         except (ProcessLookupError, OSError):
