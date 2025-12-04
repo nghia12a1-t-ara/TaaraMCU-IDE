@@ -33,8 +33,9 @@ ACTION_DEFINITIONS = {
     # File actions
     "file.new": ActionDefinition("file.new", "New File", "Ctrl+N", "icons/new.svg"),
     "file.new_project": ActionDefinition("file.new_project", "New STM32 Project", None, "icons/open_proj.svg"),
-    "file.open": ActionDefinition("file.open", "Open...", "Ctrl+O", "icons/open.svg"),
-    "file.open_project": ActionDefinition("file.open_project", "Open Project...", None, "icons/open_proj.svg"),
+    "file.open": ActionDefinition("file.open", "Open File...", "Ctrl+O", "icons/open.svg"),
+    "file.open_folder": ActionDefinition("file.open_folder", "Open Folder...", "Ctrl+Shift+O", "icons/open_folder.svg"),
+    "file.open_project": ActionDefinition("file.open_project", "Open STM32 Project...", None, "icons/open_proj.svg"),
     "file.save": ActionDefinition("file.save", "Save", "Ctrl+S", "icons/save.svg"),
     "file.save_as": ActionDefinition("file.save_as", "Save As...", "Ctrl+Shift+S"),
     "file.close_tab": ActionDefinition("file.close_tab", "Close Tab", "Ctrl+F4"),
@@ -56,8 +57,8 @@ ACTION_DEFINITIONS = {
     # View actions
     "view.word_wrap": ActionDefinition("view.word_wrap", "Word Wrap", "Ctrl+W", "icons/word-wrap.svg", checkable=True),
     "view.show_all_chars": ActionDefinition("view.show_all_chars", "Show All Characters", "Ctrl+J", "icons/show_all_char.svg", checkable=True),
+    "view.function_list": ActionDefinition("view.function_list", "Function List", "Ctrl+L", "icons/function-list.svg", checkable=True),
     "view.project_panel": ActionDefinition("view.project_panel", "Project Panel", checkable=True),
-    "view.function_list": ActionDefinition("view.function_list", "Function List", checkable=True),
     "view.terminal": ActionDefinition("view.terminal", "Terminal", checkable=True),
     "view.debugger": ActionDefinition("view.debugger", "Debugger", checkable=True),
     

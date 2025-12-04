@@ -23,6 +23,7 @@ class EditorManager(QObject):
     file_saved = Signal(str)         # file_path - Emitted when a file is saved (file_path)
     file_opened = Signal(str)        # file_path - Emitted when a file is opened (file_path)
     content_modified = Signal()      # any editor modified - Emitted when any editor content is modified
+    cursor_position_changed = Signal(int, int)  # (line, column) - Emitted when cursor position changes
     
     TAB_COLOR_SAVED = QColor("#00AC06")    # Light green
     TAB_COLOR_MODIFIED = QColor("#D6413A") # Light red
@@ -526,7 +527,6 @@ class EditorManager(QObject):
         
         definition = self._ctags_handler.find_definition(word, current_path)
         if definition:
-            print(f"[EditorManager] Going to definition of '{word}': {definition}")
             if len(definition) == 2:
                 file_path, line = definition
                 column = 0
@@ -661,6 +661,11 @@ class EditorManager(QObject):
     
     def _on_cursor_changed(self):
         """Handle cursor position change."""
+        editor = self.get_current_editor()
+        if editor:
+            line, col = editor.getCursorPosition()
+            self.cursor_position_changed.emit(line, col)
+        
         if hasattr(self._parent, 'update_status_bar'):
             self._parent.update_status_bar()
     

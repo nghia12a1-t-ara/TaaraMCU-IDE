@@ -60,6 +60,10 @@ class StatusBarManager(QObject):
         """Update cursor position display (alias for set_position)"""
         self.set_position(line, column)
     
+    def update_cursor_position(self, line: int, column: int) -> None:
+        """Update cursor position display (alias for set_position)"""
+        self.set_position(line, column)
+    
     def set_encoding(self, encoding: str) -> None:
         """Update encoding display"""
         self._encoding_label.setText(encoding)

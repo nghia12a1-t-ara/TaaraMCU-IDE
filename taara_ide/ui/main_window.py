@@ -7,7 +7,8 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QSplitter, QTabWidget, QDockWidget,
-    QMessageBox, QFileDialog, QApplication, QWidget
+    QMessageBox, QFileDialog, QApplication, QWidget,
+    QHBoxLayout, QVBoxLayout, QStackedWidget
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QCloseEvent, QIcon
@@ -15,6 +16,8 @@ from PyQt6.QtGui import QCloseEvent, QIcon
 from taara_ide.ui.actions import ActionManager
 from taara_ide.ui.menu_manager import MenuManager
 from taara_ide.ui.status_bar import StatusBarManager
+from taara_ide.ui.activity_bar import ActivityBar
+from taara_ide.ui.breadcrumb_bar import BreadcrumbBar
 from taara_ide.ui.dialogs import (
     FindDialog, GoToLineDialog, ProjectConfigDialog,
     CtagsPathDialog, CreateProjectDialog, InstallFrameworkDialog
@@ -24,6 +27,10 @@ from taara_ide.ui.panels.project_view import ProjectView
 from taara_ide.ui.panels.function_list import FunctionList
 from taara_ide.ui.panels.terminal import Terminal
 from taara_ide.ui.panels.debugger_panel import DebuggerPanel
+from taara_ide.ui.panels.search_panel import SearchPanel
+from taara_ide.ui.panels.git_panel import GitPanel
+from taara_ide.ui.panels.extensions_panel import ExtensionsPanel
+from taara_ide.ui.panels.debug_sidebar import DebugSidebarPanel
 
 from taara_ide.config import SettingsManager, AppConstants
 from taara_ide.services import ProjectService, BuildService, DebugService
@@ -60,6 +67,18 @@ class MainWindow(QMainWindow):
         self._function_list = None
         self._terminal = None
         self._debugger_panel = None
+        self._activity_bar = None
+        self._search_panel = None
+        self._git_panel = None
+        self._extensions_panel = None
+        self._debug_sidebar = None
+        self._sidebar_stack = None
+        self._center_splitter = None
+        self._right_panel = None
+        self._breadcrumb_bar = None
+        
+        self._saved_sidebar_width = 250  # Default sidebar width
+        self._saved_right_panel_width = 200  # Default function list width
         
         self._setup_window()
         self._setup_ui()
@@ -95,31 +114,79 @@ class MainWindow(QMainWindow):
         # Create status bar
         self._status_manager = StatusBarManager(self.statusBar())
         
-        # Create central splitter
-        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.setCentralWidget(self._main_splitter)
+        # Main container widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         
-        # Left panel (project view + function list)
-        self._left_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._main_splitter.addWidget(self._left_splitter)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Activity Bar (left toolbar)
+        self._activity_bar = ActivityBar(self)
+        self._activity_bar.panel_changed.connect(self._on_activity_panel_changed)
+        main_layout.addWidget(self._activity_bar)
+        
+        # Main splitter (sidebar + editor area)
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(self._main_splitter)
+        
+        # Sidebar with stacked panels
+        self._sidebar_stack = QStackedWidget()
+        self._sidebar_stack.setMinimumWidth(200)
+        self._sidebar_stack.setMaximumWidth(400)
+        self._main_splitter.addWidget(self._sidebar_stack)
+        
+        # Project panel (index 0) - contains only project view
+        self._project_panel = QWidget()
+        project_layout = QVBoxLayout(self._project_panel)
+        project_layout.setContentsMargins(0, 0, 0, 0)
         
         self._project_view = ProjectView(self)
-        self._project_view.setTitleBarWidget(QWidget())  # Remove title bar
+        self._project_view.setTitleBarWidget(QWidget())
         self._project_view.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        self._left_splitter.addWidget(self._project_view)
-        # Note: file_requested signal will be connected in _connect_editor_manager
+        project_layout.addWidget(self._project_view)
         
-        self._function_list = FunctionList(self)
-        self._function_list.setTitleBarWidget(QWidget())  # Remove title bar
-        self._function_list.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        self._left_splitter.addWidget(self._function_list)
-        # Note: symbol_selected signal will be connected in _connect_editor_manager
+        self._sidebar_stack.addWidget(self._project_panel)  # Index 0: Project
+        
+        # Search panel (index 1)
+        self._search_panel = SearchPanel(self)
+        self._search_panel.file_requested.connect(self._on_search_file_requested)
+        self._sidebar_stack.addWidget(self._search_panel)  # Index 1: Search
+        
+        # Git panel (index 2)
+        self._git_panel = GitPanel(self)
+        self._sidebar_stack.addWidget(self._git_panel)  # Index 2: Git
+        
+        # Debug sidebar (index 3)
+        self._debug_sidebar = DebugSidebarPanel(self)
+        self._sidebar_stack.addWidget(self._debug_sidebar)  # Index 3: Debug
+        
+        # Extensions panel (index 4)
+        self._extensions_panel = ExtensionsPanel(self)
+        self._sidebar_stack.addWidget(self._extensions_panel)  # Index 4: Extensions
+        
+        self._center_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter.addWidget(self._center_splitter)
+        
+        editor_area = QWidget()
+        editor_layout = QVBoxLayout(editor_area)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(0)
+        
+        # Breadcrumb bar
+        self._breadcrumb_bar = BreadcrumbBar(self)
+        self._breadcrumb_bar.symbol_clicked.connect(self._on_breadcrumb_symbol_clicked)
+        editor_layout.addWidget(self._breadcrumb_bar)
         
         # Center (editor area)
         self._tab_widget = QTabWidget()
         self._tab_widget.setTabsClosable(True)
         self._tab_widget.setMovable(True)
-        self._main_splitter.addWidget(self._tab_widget)
+        editor_layout.addWidget(self._tab_widget)
+        
+        self._center_splitter.addWidget(editor_area)
+        
         self._tab_widget.tabBar().setStyleSheet("""
             QTabBar::tab {
                 background: #d8dded;
@@ -142,13 +209,58 @@ class MainWindow(QMainWindow):
                 background: #2a2a2a;
             }
         """)
+        
+        self._right_panel = QWidget()
+        right_layout = QVBoxLayout(self._right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self._function_list = FunctionList(self)
+        self._function_list.setTitleBarWidget(QWidget())
+        self._function_list.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        right_layout.addWidget(self._function_list)
+        
+        self._center_splitter.addWidget(self._right_panel)
 
+        # Show function list by default
+        right_panel_visible = self._settings_manager.get_right_panel_width() != 0
+        self._right_panel.setVisible(right_panel_visible)
+        self._actions.set_checked("view.function_list", right_panel_visible)
+        
         # Set splitter sizes
         self._main_splitter.setSizes([250, 750])
-        self._left_splitter.setSizes([400, 200])  # Set left splitter sizes
+        if right_panel_visible:
+            self._center_splitter.setSizes([600, 300])
+        else:
+            self._center_splitter.setSizes([800, 0])
         
         # Create dock widgets
         self._setup_dock_widgets()
+    
+    def _on_activity_panel_changed(self, panel_id: str):
+        """Handle activity bar panel change"""
+        if not panel_id:
+            # Hide sidebar
+            self._sidebar_stack.hide()
+            return
+        
+        self._sidebar_stack.show()
+        
+        # Map panel_id to stack index
+        panel_map = {
+            ActivityBar.PANEL_PROJECT: 0,
+            ActivityBar.PANEL_SEARCH: 1,
+            ActivityBar.PANEL_GIT: 2,
+            ActivityBar.PANEL_DEBUG: 3,
+            ActivityBar.PANEL_EXTENSIONS: 4,
+        }
+        
+        index = panel_map.get(panel_id, 0)
+        self._sidebar_stack.setCurrentIndex(index)
+    
+    def _on_search_file_requested(self, file_path: str, line_num: int):
+        """Handle search result double click"""
+        if hasattr(self, '_editor_manager'):
+            self._editor_manager.open_file_at_line(file_path, line_num, 0)
     
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels"""
@@ -196,20 +308,39 @@ class MainWindow(QMainWindow):
         
         if self._project_view:
             self._project_view.file_requested.connect(self._editor_manager.open_editor)
-            self._project_view.index_requested.connect(self._on_project_index_requested)
+            self._project_view.index_requested.connect(self._on_index_requested)
         
         if self._function_list:
             self._function_list.symbol_selected.connect(self._editor_manager.open_file_at_line)
+        
+        self._editor_manager.cursor_position_changed.connect(self._on_cursor_position_changed)
     
     def _on_editor_changed(self, editor) -> None:
         """Handle editor tab change"""
+        print("_on_editor_changed")
+        
+        file_path = None
+        if editor and hasattr(self, '_editor_manager'):
+            editor_info = self._editor_manager.editors.get(editor)
+            if editor_info:
+                file_path = editor_info.get("file_path")
+        
+        # Update window title
+        if file_path:
+            self.setWindowTitle(f"{os.path.basename(file_path)} - {AppConstants.APP_NAME}")
+            if hasattr(self, '_breadcrumb_bar') and self._breadcrumb_bar:
+                self._breadcrumb_bar.set_file(file_path)
+        else:
+            self.setWindowTitle(AppConstants.APP_NAME)
+            if hasattr(self, '_breadcrumb_bar') and self._breadcrumb_bar:
+                self._breadcrumb_bar.set_file(None)
+        
+        # Update status bar
         self.update_status_bar()
         
         # Update function list if available
-        if self._function_list and editor:
-            file_path = self._editor_manager.get_current_filepath()
-            if file_path:
-                self._editor_manager.ctags_handler.index_file_async(file_path)
+        if self._function_list and file_path:
+            self._editor_manager.ctags_handler.index_file_async(file_path)
     
     def _on_file_opened(self, file_path: str) -> None:
         """Handle file opened"""
@@ -228,6 +359,7 @@ class MainWindow(QMainWindow):
             "file.new": self._editor_manager.new_editor,
             "file.new_project": self._new_project,
             "file.open": self._editor_manager.open_editor,
+            "file.open_folder": self._open_folder,
             "file.open_project": self._open_project,
             "file.save": self._editor_manager.save_editor,
             "file.save_as": self._editor_manager.save_editor_as,
@@ -260,8 +392,8 @@ class MainWindow(QMainWindow):
             "view.debugger": self._toggle_debugger,
         })
         
-        self._actions.set_checked("view.project_panel", self._project_view.isVisible())
-        self._actions.set_checked("view.function_list", self._function_list.isVisible())
+        self._actions.set_checked("view.project_panel", self._sidebar_stack.isVisible())
+        self._actions.set_checked("view.function_list", self._right_panel.isVisible())
         self._actions.set_checked("view.terminal", self._terminal_dock.isVisible())
         self._actions.set_checked("view.debugger", self._debugger_dock.isVisible())
         
@@ -324,15 +456,38 @@ class MainWindow(QMainWindow):
         dialog.exec()
     
     def _open_project(self) -> None:
-        """Open project dialog"""
+        """Open STM32 project dialog"""
         directory = QFileDialog.getExistingDirectory(
-            self, "Open Project"
+            self, "Open STM32 Project"
         )
         if directory:
             result = self._project_service.open_project(directory)
             if not result.success:
                 QMessageBox.warning(self, "Error", f"Failed to open project: {result.message}")
     
+    def _open_folder(self) -> None:
+        """Open a generic folder (not STM32 project)"""
+        directory = QFileDialog.getExistingDirectory(
+            self, "Open Folder"
+        )
+        if directory:
+            # Set folder in project view for browsing
+            self._project_view.set_project_directory(directory)
+            
+            if self._search_panel:
+                self._search_panel.set_project_path(directory)
+            
+            # Index folder with CTags for code navigation
+            if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
+                self._editor_manager.ctags_handler.index_project(directory)
+            
+            # Save as last opened folder
+            self._settings_manager.set_last_project(directory)
+            
+            # Update window title
+            folder_name = os.path.basename(directory)
+            self.setWindowTitle(f"{folder_name} - {AppConstants.APP_NAME} - {AppConstants.VERSION}")
+
     # ========== Edit Operations ==========
     
     def _show_find_dialog(self) -> None:
@@ -451,6 +606,9 @@ class MainWindow(QMainWindow):
         # Update project view
         if self._project_view:
             self._project_view.set_project_directory(path)
+        
+        if self._search_panel:
+            self._search_panel.set_project_path(path)
     
     def _on_project_closed(self) -> None:
         """Handle project closed"""
@@ -506,6 +664,22 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
         
+        main_sizes = self._settings_manager.get_main_splitter_sizes()
+        if main_sizes and len(main_sizes) == 2:
+            self._main_splitter.setSizes(main_sizes)
+        
+        center_sizes = self._settings_manager.get_right_splitter_sizes()
+        if center_sizes and len(center_sizes) == 2:
+            self._center_splitter.setSizes(center_sizes)
+        
+        right_panel_width = self._settings_manager.get_right_panel_width()
+        if right_panel_width == 0:
+            self._right_panel.setVisible(False)
+            self._actions.set_checked("view.function_list", False)
+        else:
+            self._right_panel.setVisible(True)
+            self._actions.set_checked("view.function_list", True)
+        
         # Restore last project
         last_project = self._settings_manager.get_last_project()
         if last_project and Path(last_project).exists():
@@ -531,8 +705,24 @@ class MainWindow(QMainWindow):
     
     def _save_state(self) -> None:
         """Save window state to settings"""
+        # Cleanup all CTags files before saving
+        print("[main_window] Cleaning up all CTags files...")
+        if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
+            self._editor_manager.ctags_handler.cleanup_all_tags()
+        
         self._settings_manager.set_window_geometry(self.saveGeometry())
         self._settings_manager.set_window_state(self.saveState())
+        
+        self._settings_manager.set_main_splitter_sizes(self._main_splitter.sizes())
+        self._settings_manager.set_right_splitter_sizes(self._center_splitter.sizes())
+        
+        if self._right_panel.isVisible():
+            # Save actual width when visible
+            width = self._center_splitter.sizes()[1] if len(self._center_splitter.sizes()) > 1 else 200
+            self._settings_manager.set_right_panel_width(width)
+        else:
+            # Save 0 to indicate hidden
+            self._settings_manager.set_right_panel_width(0)
         
         # Save current project
         if self._project_service.path:
@@ -582,47 +772,112 @@ class MainWindow(QMainWindow):
     
     # ========== View Toggle Operations ==========
     
-    def _toggle_word_wrap(self) -> None:
-        """Toggle word wrap in current editor"""
-        self._editor_manager.toggle_word_wrap()
-        # Update action checked state
+    def _toggle_word_wrap(self, checked: bool = None) -> None:
+        """Toggle word wrap for current editor"""
         editor = self._editor_manager.get_current_editor()
         if editor:
             from PyQt6.Qsci import QsciScintilla
-            is_wrapped = editor.wrapMode() != QsciScintilla.WrapMode.WrapNone
+            if checked is not None:
+                wrap_mode = QsciScintilla.WrapMode.WrapWord if checked else QsciScintilla.WrapMode.WrapNone
+            else:
+                current_mode = editor.wrapMode()
+                wrap_mode = QsciScintilla.WrapMode.WrapNone if current_mode == QsciScintilla.WrapMode.WrapWord else QsciScintilla.WrapMode.WrapWord
+            editor.setWrapMode(wrap_mode)
+            is_wrapped = wrap_mode == QsciScintilla.WrapMode.WrapWord
             self._actions.set_checked("view.word_wrap", is_wrapped)
     
-    def _toggle_whitespace(self) -> None:
-        """Toggle whitespace visibility in current editor"""
-        self._editor_manager.toggle_whitespace()
-        # Update action checked state
+    def _toggle_whitespace(self, checked: bool = None) -> None:
+        """Toggle whitespace visibility for current editor"""
         editor = self._editor_manager.get_current_editor()
         if editor:
             from PyQt6.Qsci import QsciScintilla
-            is_visible = editor.whitespaceVisibility() != QsciScintilla.WhitespaceVisibility.WsInvisible
+            if checked is not None:
+                ws_mode = QsciScintilla.WhitespaceVisibility.WsVisible if checked else QsciScintilla.WhitespaceVisibility.WsInvisible
+            else:
+                current_mode = editor.whitespaceVisibility()
+                ws_mode = QsciScintilla.WhitespaceVisibility.WsInvisible if current_mode == QsciScintilla.WhitespaceVisibility.WsVisible else QsciScintilla.WhitespaceVisibility.WsVisible
+            editor.setWhitespaceVisibility(ws_mode)
+            is_visible = ws_mode == QsciScintilla.WhitespaceVisibility.WsVisible
             self._actions.set_checked("view.show_all_chars", is_visible)
     
-    def _toggle_project_panel(self) -> None:
+    def _toggle_project_panel(self, checked: bool = None) -> None:
         """Toggle project panel visibility"""
-        visible = not self._project_view.isVisible()
-        self._project_view.setVisible(visible)
+        if checked is not None:
+            visible = checked
+        else:
+            visible = not self._sidebar_stack.isVisible()
+        
+        if visible:
+            # Restore saved width
+            current_sizes = self._main_splitter.sizes()
+            if len(current_sizes) >= 2:
+                activity_bar_width = current_sizes[0]  # Activity bar is fixed
+                remaining = sum(current_sizes[1:])
+                self._main_splitter.setSizes([
+                    activity_bar_width,
+                    self._saved_sidebar_width,
+                    remaining - self._saved_sidebar_width
+                ])
+            self._sidebar_stack.setVisible(True)
+        else:
+            # Save current width before hiding
+            current_sizes = self._main_splitter.sizes()
+            if len(current_sizes) >= 2 and current_sizes[1] > 0:
+                self._saved_sidebar_width = current_sizes[1]
+            self._sidebar_stack.setVisible(False)
+            # Collapse to 0
+            if len(current_sizes) >= 2:
+                activity_bar_width = current_sizes[0]
+                remaining = sum(current_sizes[1:])
+                self._main_splitter.setSizes([activity_bar_width, 0, remaining])
+        
         self._actions.set_checked("view.project_panel", visible)
     
-    def _toggle_function_list(self) -> None:
+    def _toggle_function_list(self, checked: bool = None) -> None:
         """Toggle function list visibility"""
-        visible = not self._function_list.isVisible()
-        self._function_list.setVisible(visible)
+        if checked is not None:
+            visible = checked
+        else:
+            visible = not self._right_panel.isVisible()
+        
+        if visible:
+            # Restore saved width
+            current_sizes = self._center_splitter.sizes()
+            if len(current_sizes) == 2:
+                total = sum(current_sizes)
+                self._center_splitter.setSizes([
+                    total - self._saved_right_panel_width,
+                    self._saved_right_panel_width
+                ])
+            self._right_panel.setVisible(True)
+        else:
+            # Save current width before hiding
+            current_sizes = self._center_splitter.sizes()
+            if len(current_sizes) == 2 and current_sizes[1] > 0:
+                self._saved_right_panel_width = current_sizes[1]
+            self._right_panel.setVisible(False)
+            # Collapse to 0
+            if len(current_sizes) == 2:
+                total = sum(current_sizes)
+                self._center_splitter.setSizes([total, 0])
+        
         self._actions.set_checked("view.function_list", visible)
     
-    def _toggle_terminal(self) -> None:
+    def _toggle_terminal(self, checked: bool = None) -> None:
         """Toggle terminal dock visibility"""
-        visible = not self._terminal_dock.isVisible()
+        if checked is not None:
+            visible = checked
+        else:
+            visible = not self._terminal_dock.isVisible()
         self._terminal_dock.setVisible(visible)
         self._actions.set_checked("view.terminal", visible)
     
-    def _toggle_debugger(self) -> None:
+    def _toggle_debugger(self, checked: bool = None) -> None:
         """Toggle debugger dock visibility"""
-        visible = not self._debugger_dock.isVisible()
+        if checked is not None:
+            visible = checked
+        else:
+            visible = not self._debugger_dock.isVisible()
         self._debugger_dock.setVisible(visible)
         self._actions.set_checked("view.debugger", visible)
     
@@ -664,7 +919,7 @@ class MainWindow(QMainWindow):
     
     # ========== CTags Indexing Handler ==========
     
-    def _on_project_index_requested(self, directory: str) -> None:
+    def _on_index_requested(self, directory: str) -> None:
         """Handle project indexing request from ProjectView"""
         self._status_manager.set_message(f"Indexing project: {directory}...")
         success = self._editor_manager.ctags_handler.index_project(directory)
@@ -672,3 +927,20 @@ class MainWindow(QMainWindow):
             self._status_manager.set_message(f"Project indexed successfully", 3000)
         else:
             self._status_manager.set_message(f"Failed to index project", 3000)
+    
+    # ========== Breadcrumb Bar Handler ==========
+    
+    def _on_cursor_position_changed(self, line: int, column: int) -> None:
+        """Handle cursor position change to update breadcrumb"""
+        # Get current symbols from function list
+        if hasattr(self._function_list, '_symbols'):
+            self._breadcrumb_bar.update_from_cursor(line, self._function_list._symbols)
+        
+        # Update status bar cursor position
+        self._status_manager.update_cursor_position(line + 1, column + 1)
+    
+    def _on_breadcrumb_symbol_clicked(self, symbol_name: str, line: int) -> None:
+        """Handle breadcrumb symbol click - go to line"""
+        editor = self._editor_manager.get_current_editor()
+        if editor:
+            editor.goto_line(line)

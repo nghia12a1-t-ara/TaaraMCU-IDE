@@ -208,3 +208,54 @@ class SettingsManager:
     def set_active_tab_index(self, index: int) -> None:
         """Set active tab index"""
         self.set("session/activeTabIndex", index)
+    
+    # ========== Layout settings ==========
+    
+    def get_left_splitter_sizes(self) -> Optional[List[int]]:
+        """Get left splitter sizes"""
+        sizes = self.get("layout/leftSplitterSizes")
+        if sizes:
+            return [int(s) for s in sizes]
+        return None
+    
+    def set_left_splitter_sizes(self, sizes: List[int]) -> None:
+        """Set left splitter sizes"""
+        self.set("layout/leftSplitterSizes", sizes)
+    
+    def get_main_splitter_sizes(self) -> Optional[List[int]]:
+        """Get main splitter sizes"""
+        sizes = self.get("layout/mainSplitterSizes")
+        if sizes:
+            return [int(s) for s in sizes]
+        return None
+    
+    def set_main_splitter_sizes(self, sizes: List[int]) -> None:
+        """Set main splitter sizes"""
+        self.set("layout/mainSplitterSizes", sizes)
+    
+    def get_right_splitter_sizes(self) -> Optional[List[int]]:
+        """Get right splitter sizes"""
+        sizes = self.get("layout/rightSplitterSizes")
+        if sizes:
+            return [int(s) for s in sizes]
+        return None
+    
+    def set_right_splitter_sizes(self, sizes: List[int]) -> None:
+        """Set right splitter sizes"""
+        self.set("layout/rightSplitterSizes", sizes)
+    
+    def get_sidebar_width(self) -> int:
+        """Get sidebar width"""
+        return int(self.get("layout/sidebarWidth", 250))
+    
+    def set_sidebar_width(self, width: int) -> None:
+        """Set sidebar width"""
+        self.set("layout/sidebarWidth", width)
+    
+    def get_right_panel_width(self) -> int:
+        """Get right panel width"""
+        return int(self.get("layout/rightPanelWidth", 200))
+    
+    def set_right_panel_width(self, width: int) -> None:
+        """Set right panel width"""
+        self.set("layout/rightPanelWidth", width)

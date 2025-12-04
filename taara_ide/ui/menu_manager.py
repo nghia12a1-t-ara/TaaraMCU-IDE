@@ -60,6 +60,7 @@ class MenuManager:
         # View toggles
         self._toolbar.addAction(self._actions["view.word_wrap"])
         self._toolbar.addAction(self._actions["view.show_all_chars"])
+        self._toolbar.addAction(self._actions["view.function_list"])
     
     def _create_file_menu(self) -> None:
         """Create File menu"""
@@ -72,7 +73,10 @@ class MenuManager:
         menu.addMenu(new_menu)
         
         menu.addAction(self._actions["file.open"])
+        menu.addAction(self._actions["file.open_folder"])
         menu.addAction(self._actions["file.open_project"])
+        menu.addSeparator()
+        
         menu.addAction(self._actions["file.save"])
         menu.addAction(self._actions["file.save_as"])
         menu.addSeparator()
@@ -111,14 +115,16 @@ class MenuManager:
         # Panels submenu
         panels_menu = QMenu("Panels", self._window)
         panels_menu.addAction(self._actions["view.project_panel"])
-        panels_menu.addAction(self._actions["view.function_list"])
         panels_menu.addAction(self._actions["view.terminal"])
         panels_menu.addAction(self._actions["view.debugger"])
         menu.addMenu(panels_menu)
         
         menu.addSeparator()
+        
+        # View toggles
         menu.addAction(self._actions["view.word_wrap"])
         menu.addAction(self._actions["view.show_all_chars"])
+        menu.addAction(self._actions["view.function_list"])
     
     def _create_build_menu(self) -> None:
         """Create Build menu"""
