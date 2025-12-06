@@ -2,15 +2,13 @@
 Main application window - refactored version
 """
 import os
-from typing import Optional, List
-from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QSplitter, QTabWidget, QDockWidget,
-    QMessageBox, QFileDialog, QApplication, QWidget,
+    QMessageBox, QFileDialog, QWidget,
     QHBoxLayout, QVBoxLayout, QStackedWidget
 )
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QCloseEvent, QIcon
 
 from taara_ide.ui.actions import ActionManager
