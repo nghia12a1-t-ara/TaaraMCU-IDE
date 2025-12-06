@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
         self._function_list = None
         self._terminal = None
         self._debugger_panel = None
+        self._debugger_dock = None  # Add _debugger_dock variable declaration
         self._activity_bar = None
         self._search_panel = None
         self._git_panel = None
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         # Breadcrumb bar
         self._breadcrumb_bar = BreadcrumbBar(self)
         self._breadcrumb_bar.symbol_clicked.connect(self._on_breadcrumb_symbol_clicked)
+        self._breadcrumb_bar.file_open_requested.connect(self._on_breadcrumb_file_requested)
         editor_layout.addWidget(self._breadcrumb_bar)
         
         # Center (editor area)
@@ -262,24 +264,22 @@ class MainWindow(QMainWindow):
     
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels"""
-        self._terminal_dock = QDockWidget("Terminal", self)
-        self._terminal_dock.setObjectName("TerminalDock")
-        self._terminal_dock.setAllowedAreas(
+        self._terminal = Terminal(self)
+        self._terminal.setObjectName("TerminalDock")
+        self._terminal.setAllowedAreas(
             Qt.DockWidgetArea.BottomDockWidgetArea | 
             Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self._terminal = Terminal(self)
-        self._terminal_dock.setWidget(self._terminal)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._terminal_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._terminal)
         
         self._debugger_dock = QDockWidget("Debugger", self)
         self._debugger_dock.setObjectName("DebuggerDock")
+        self._debugger_panel = DebuggerPanel(self._debug_service, self)
+        self._debugger_dock.setWidget(self._debugger_panel)
         self._debugger_dock.setAllowedAreas(
             Qt.DockWidgetArea.BottomDockWidgetArea |
             Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self._debugger_panel = DebuggerPanel(self)
-        self._debugger_dock.setWidget(self._debugger_panel)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._debugger_dock)
         self._debugger_dock.hide()
     
@@ -315,7 +315,7 @@ class MainWindow(QMainWindow):
     
     def _on_editor_changed(self, editor) -> None:
         """Handle editor tab change"""
-        print("_on_editor_changed")
+        # print("_on_editor_changed")
         
         file_path = None
         if editor and hasattr(self, '_editor_manager'):
@@ -392,7 +392,7 @@ class MainWindow(QMainWindow):
         
         self._actions.set_checked("view.project_panel", self._sidebar_stack.isVisible())
         self._actions.set_checked("view.function_list", self._right_panel.isVisible())
-        self._actions.set_checked("view.terminal", self._terminal_dock.isVisible())
+        self._actions.set_checked("view.terminal", self._terminal.isVisible())
         self._actions.set_checked("view.debugger", self._debugger_dock.isVisible())
         
         # Build actions
@@ -625,7 +625,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
     
     def _show_project_config(self) -> None:
-        """Show project configuration dialog"""
+        """Show project config dialog"""
         if not self._project_service.is_open:
             QMessageBox.warning(self, "Error", "No project is open.")
             return
@@ -715,10 +715,6 @@ class MainWindow(QMainWindow):
     
     def _save_state(self) -> None:
         """Save window state to settings"""
-        print("[main_window] Cleaning up all CTags files...")
-        if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
-            self._editor_manager.ctags_handler.cleanup_all_tags()
-        
         self._settings_manager.set_window_geometry(self.saveGeometry())
         self._settings_manager.set_window_state(self.saveState())
         
@@ -754,6 +750,8 @@ class MainWindow(QMainWindow):
             elif reply == QMessageBox.StandardButton.Cancel:
                 event.ignore()
                 return
+            else:
+                self._editor_manager.discard_all_changes()
         
         if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
             print("[main_window] Cleaning up all CTags files...")
@@ -844,9 +842,11 @@ class MainWindow(QMainWindow):
         if checked is not None:
             visible = checked
         else:
-            visible = not self._terminal_dock.isVisible()
-        self._terminal_dock.setVisible(visible)
+            visible = not self._terminal.isVisible()
+        self._terminal.setVisible(visible)
         self._actions.set_checked("view.terminal", visible)
+        if visible and hasattr(self._terminal, 'focus_input'):
+            self._terminal.focus_input()
     
     def _toggle_debugger(self, checked: bool = None) -> None:
         """Toggle debugger dock visibility"""
@@ -916,7 +916,11 @@ class MainWindow(QMainWindow):
         self._status_manager.update_cursor_position(line + 1, column + 1)
     
     def _on_breadcrumb_symbol_clicked(self, symbol_name: str, line: int) -> None:
-        """Handle breadcrumb symbol click - go to line"""
-        editor = self._editor_manager.get_current_editor()
-        if editor:
-            editor.goto_line(line)
+        """Handle symbol click in breadcrumb bar"""
+        if self._editor_manager:
+            self._editor_manager.goto_line(line)
+    
+    def _on_breadcrumb_file_requested(self, file_path: str):
+        """Handle file open request from breadcrumb dropdown"""
+        if self._editor_manager and os.path.isfile(file_path):
+            self._editor_manager.open_editor(file_path)

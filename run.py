@@ -12,6 +12,11 @@ Or make it executable:
 """
 import sys
 import os
+import ctypes
+
+# Set application user model ID on Windows for proper taskbar grouping
+if sys.platform == "win32":
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TaaraMCU.IDE")
 
 # Ensure the taara_ide package is in the path
 project_root = os.path.dirname(os.path.abspath(__file__))

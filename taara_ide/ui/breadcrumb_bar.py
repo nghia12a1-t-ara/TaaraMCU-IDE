@@ -1,48 +1,155 @@
 """
 Breadcrumb bar component showing file path and current symbol (class/function).
-Similar to VS Code's breadcrumb navigation.
+Similar to VS Code's breadcrumb navigation with dropdown folder/file listing.
 """
+import os
 from typing import Optional, List
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton,
-    QMenu, QSizePolicy
+    QMenu, QSizePolicy, QWidgetAction
 )
 from PyQt6.QtCore import pyqtSignal as Signal, Qt
-from PyQt6.QtGui import QIcon, QFont
+from PyQt6.QtGui import QIcon, QFont, QAction
 
 
 class BreadcrumbItem(QPushButton):
-    """A single clickable breadcrumb item"""
+    """A single clickable breadcrumb item with dropdown support"""
     
     clicked_item = Signal(str, str)  # (type, value) - type: 'folder', 'file', 'class', 'function'
+    file_requested = Signal(str)  # Request to open a file
+    folder_requested = Signal(str)  # Request to navigate to folder
     
     def __init__(self, text: str, item_type: str, value: str, parent=None):
         super().__init__(text, parent)
         self._item_type = item_type
         self._value = value
+        self._dropdown_enabled = item_type == 'folder'
         
         self.setFlat(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet("""
-            QPushButton {
-                border: none;
-                padding: 2px 4px;
-                color: #606060;
-                background: transparent;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #e0e0e0;
-                border-radius: 3px;
-            }
-        """)
+        self._apply_style()
         
         self.clicked.connect(self._on_clicked)
     
+    def _apply_style(self):
+        """Apply styling based on item type"""
+        if self._item_type == 'folder':
+            self.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    padding: 2px 6px;
+                    color: #505050;
+                    background: transparent;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background: #d8d8d8;
+                    border-radius: 3px;
+                    color: #202020;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    padding: 2px 4px;
+                    color: #606060;
+                    background: transparent;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background: #e0e0e0;
+                    border-radius: 3px;
+                }
+            """)
+    
     def _on_clicked(self):
-        self.clicked_item.emit(self._item_type, self._value)
+        """Handle click - show dropdown for folders, emit signal for others"""
+        if self._dropdown_enabled and self._item_type == 'folder':
+            self._show_folder_dropdown()
+        else:
+            self.clicked_item.emit(self._item_type, self._value)
+    
+    def _show_folder_dropdown(self):
+        """Show dropdown menu with folder contents"""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background: #ffffff;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 4px 0;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 12px;
+                font-size: 12px;
+            }
+            QMenu::item:selected {
+                background: #e8f0fe;
+                color: #1a73e8;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #e0e0e0;
+                margin: 4px 8px;
+            }
+        """)
+        
+        folder_path = Path(self._value)
+        
+        if not folder_path.exists():
+            return
+        
+        # Get folder contents
+        try:
+            items = sorted(folder_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        except PermissionError:
+            return
+        
+        # Separate folders and files
+        folders = [item for item in items if item.is_dir() and not item.name.startswith('.')]
+        files = [item for item in items if item.is_file() and not item.name.startswith('.')]
+        
+        # Add folders first
+        if folders:
+            for folder in folders[:15]:  # Limit to 15 folders
+                action = menu.addAction(self._get_folder_icon(), folder.name)
+                action.setData(('folder', str(folder)))
+                action.triggered.connect(lambda checked, p=str(folder): self.folder_requested.emit(p))
+            
+            if len(folders) > 15:
+                more_action = menu.addAction(f"... and {len(folders) - 15} more folders")
+                more_action.setEnabled(False)
+        
+        # Add separator if both folders and files exist
+        if folders and files:
+            menu.addSeparator()
+        
+        # Add files
+        if files:
+            for file in files[:20]:  # Limit to 20 files
+                icon = self._get_file_icon(file.suffix)
+                action = menu.addAction(icon, file.name)
+                action.setData(('file', str(file)))
+                action.triggered.connect(lambda checked, p=str(file): self.file_requested.emit(p))
+            
+            if len(files) > 20:
+                more_action = menu.addAction(f"... and {len(files) - 20} more files")
+                more_action.setEnabled(False)
+        
+        # Show menu below button
+        menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
+    
+    def _get_folder_icon(self) -> QIcon:
+        """Get folder icon"""
+        # Use text-based icon as fallback
+        return QIcon()
+    
+    def _get_file_icon(self, suffix: str) -> QIcon:
+        """Get appropriate file icon based on extension"""
+        return QIcon()
 
 
 class BreadcrumbSeparator(QLabel):
@@ -64,11 +171,13 @@ class BreadcrumbBar(QWidget):
     Breadcrumb navigation bar showing:
     - File path (folder > folder > file.py)
     - Current symbol (Class > function)
+    - Dropdown navigation for folders
     """
     
     # Signals
     folder_clicked = Signal(str)  # folder path
     file_clicked = Signal(str)    # file path
+    file_open_requested = Signal(str)  # request to open file from dropdown
     symbol_clicked = Signal(str, int)  # symbol name, line number
     
     def __init__(self, parent=None):
@@ -177,14 +286,17 @@ class BreadcrumbBar(QWidget):
             try:
                 relative_path = file_path.relative_to(self._project_root)
                 parts = list(relative_path.parts)
+                base_path = Path(self._project_root)
             except ValueError:
                 parts = list(file_path.parts)
+                base_path = Path(file_path.parts[0]) if file_path.parts else Path()
         else:
-            # Show last 3 parts of path
+            # Show last 4 parts of path
             parts = list(file_path.parts)[-4:] if len(file_path.parts) > 4 else list(file_path.parts)
+            base_path = Path(*file_path.parts[:-len(parts)]) if len(file_path.parts) > len(parts) else Path()
         
-        # Add folder items
-        current_path = Path(self._project_root) if self._project_root else Path()
+        # Add folder items with dropdown support
+        current_path = base_path
         for i, part in enumerate(parts[:-1]):  # All except filename
             current_path = current_path / part
             
@@ -193,6 +305,8 @@ class BreadcrumbBar(QWidget):
             
             item = BreadcrumbItem(part, 'folder', str(current_path))
             item.clicked_item.connect(self._on_item_clicked)
+            item.file_requested.connect(self._on_file_requested)
+            item.folder_requested.connect(self._on_folder_requested)
             self._items_layout.addWidget(item)
         
         # Add file item
@@ -212,7 +326,7 @@ class BreadcrumbBar(QWidget):
         if self._current_class:
             self._items_layout.addWidget(BreadcrumbSeparator())
             
-            class_item = BreadcrumbItem(f"📦 {self._current_class}", 'class', self._current_class)
+            class_item = BreadcrumbItem(f"{self._current_class}", 'class', self._current_class)
             class_item.clicked_item.connect(self._on_item_clicked)
             class_item.setStyleSheet("""
                 QPushButton {
@@ -221,6 +335,7 @@ class BreadcrumbBar(QWidget):
                     color: #0066cc;
                     background: transparent;
                     font-size: 12px;
+                    font-weight: bold;
                 }
                 QPushButton:hover {
                     background: #e0e0e0;
@@ -233,7 +348,7 @@ class BreadcrumbBar(QWidget):
         if self._current_function:
             self._items_layout.addWidget(BreadcrumbSeparator())
             
-            func_item = BreadcrumbItem(f"⚡ {self._current_function}", 'function', self._current_function)
+            func_item = BreadcrumbItem(f"{self._current_function}()", 'function', self._current_function)
             func_item.clicked_item.connect(self._on_item_clicked)
             func_item.setStyleSheet("""
                 QPushButton {
@@ -267,6 +382,14 @@ class BreadcrumbBar(QWidget):
                     if symbol.get('name') == value:
                         self.symbol_clicked.emit(value, symbol.get('line', 1))
                         return
+    
+    def _on_file_requested(self, file_path: str):
+        """Handle file open request from dropdown"""
+        self.file_open_requested.emit(file_path)
+    
+    def _on_folder_requested(self, folder_path: str):
+        """Handle folder navigation request from dropdown"""
+        self.folder_clicked.emit(folder_path)
     
     def clear(self):
         """Clear the breadcrumb bar"""

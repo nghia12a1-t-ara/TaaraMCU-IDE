@@ -59,7 +59,7 @@ ACTION_DEFINITIONS = {
     "view.show_all_chars": ActionDefinition("view.show_all_chars", "Show All Characters", "Ctrl+J", "icons/show_all_char.svg", checkable=True),
     "view.function_list": ActionDefinition("view.function_list", "Function List", "Ctrl+L", "icons/function-list.svg", checkable=True),
     "view.project_panel": ActionDefinition("view.project_panel", "Project Panel", checkable=True),
-    "view.terminal": ActionDefinition("view.terminal", "Terminal", checkable=True),
+    "view.terminal": ActionDefinition("view.terminal", "Terminal", "Ctrl+T", "icons/terminal.svg", checkable=True),
     "view.debugger": ActionDefinition("view.debugger", "Debugger", checkable=True),
     
     # Build actions

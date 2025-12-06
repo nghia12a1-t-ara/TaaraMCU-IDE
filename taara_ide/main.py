@@ -1,8 +1,8 @@
 """
-Taara IDE - Main Entry Point
+Taara IDE - Main Entry Point File
 """
 import sys
-import os
+import ctypes
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
@@ -14,6 +14,7 @@ from taara_ide.ui.main_window import MainWindow
 
 def main():
     """Main application entry point."""
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TaaraIDE.TaaraMCU.IDE")
     # Enable high DPI scaling
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

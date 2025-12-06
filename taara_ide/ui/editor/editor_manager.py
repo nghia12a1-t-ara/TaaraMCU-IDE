@@ -2,12 +2,12 @@
 Editor Manager - Manages multiple QScintilla editor tabs.
 """
 
-from PyQt6.QtWidgets import QMessageBox, QFileDialog, QTabWidget
-from PyQt6.QtCore import QObject, pyqtSignal as Signal, Qt, QEvent
-from PyQt6.QtGui import QTextCursor, QColor
-from PyQt6.Qsci import QsciAPIs, QsciScintilla
+from PyQt6.QtWidgets import QMessageBox, QFileDialog, QTabWidget, QWidget, QVBoxLayout, QApplication
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QFileSystemWatcher, Qt
+from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Set, TYPE_CHECKING
+from PyQt6.Qsci import QsciAPIs, QsciScintilla
 
 from taara_ide.ui.editor.code_editor import CodeEditor
 from taara_ide.core.indexer.ctags_handler import CtagsHandler
@@ -17,13 +17,13 @@ if TYPE_CHECKING:
 
 
 class EditorManager(QObject):
-    editor_created = Signal(object)  # CodeEditor - Emitted when a new editor is created
-    editor_closed = Signal(str)      # file_path - Emitted when an editor is closed
-    current_editor_changed = Signal(object)  # CodeEditor - Emitted when the active editor changes
-    file_saved = Signal(str)         # file_path - Emitted when a file is saved (file_path)
-    file_opened = Signal(str)        # file_path - Emitted when a file is opened (file_path)
-    content_modified = Signal()      # any editor modified - Emitted when any editor content is modified
-    cursor_position_changed = Signal(int, int)  # (line, column) - Emitted when cursor position changes
+    editor_created = pyqtSignal(object)  # CodeEditor - Emitted when a new editor is created
+    editor_closed = pyqtSignal(str)      # file_path - Emitted when an editor is closed
+    current_editor_changed = pyqtSignal(object)  # CodeEditor - Emitted when the active editor changes
+    file_saved = pyqtSignal(str)         # file_path - Emitted when a file is saved (file_path)
+    file_opened = pyqtSignal(str)        # file_path - Emitted when a file is opened (file_path)
+    content_modified = pyqtSignal()      # any editor modified - Emitted when any editor content is modified
+    cursor_position_changed = pyqtSignal(int, int)  # (line, column) - Emitted when cursor position changes
     
     TAB_COLOR_SAVED = QColor("#00AC06")    # Light green
     TAB_COLOR_MODIFIED = QColor("#D6413A") # Light red
@@ -34,7 +34,7 @@ class EditorManager(QObject):
         self._parent = parent
         self._tab_widget = tab_widget
         
-        # Editor tracking: editor -> {file_path, index, untitled_number}
+        # Editor tracking: editor -> {file_path, index, untitled_number, original_content}
         self.editors: dict = {}
         
         # Untitled file numbering (like Notepad++)
@@ -56,10 +56,19 @@ class EditorManager(QObject):
         # CTags handler
         self._ctags_handler = CtagsHandler()
         
+        self._file_watcher = QFileSystemWatcher(self)
+        self._file_watcher.fileChanged.connect(self._on_file_changed_external)
+        self._pending_file_changes: Set[str] = set()
+        self._file_change_timer = QTimer(self)
+        self._file_change_timer.setSingleShot(True)
+        self._file_change_timer.timeout.connect(self._process_pending_file_changes)
+        
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
         self._tab_widget.tabCloseRequested.connect(self._on_close_tab_requested)
         
         self._tab_widget.tabBar().installEventFilter(self)
+        
+        self._setup_tab_shortcuts()
     
     def eventFilter(self, obj, event):
         """Handle middle mouse button click to close tabs"""
@@ -183,9 +192,11 @@ class EditorManager(QObject):
         if not file_path:
             return None
         
+        normalized_path = self._normalize_path(file_path)
+        
         # Check if already open
         for editor, info in self.editors.items():
-            if info["file_path"] == file_path:
+            if self._normalize_path(info["file_path"]) == normalized_path:
                 self._tab_widget.setCurrentIndex(info["index"])
                 return editor
         
@@ -209,7 +220,8 @@ class EditorManager(QObject):
                 "index": index,
                 "file_path": file_path,
                 "modified": False,
-                "untitled_number": None  # Not an Untitled file
+                "untitled_number": None,
+                "original_content": text  # Store original content
             }
             
             self._tab_widget.setCurrentIndex(index)
@@ -217,6 +229,8 @@ class EditorManager(QObject):
             
             self.editor_created.emit(editor)
             self.file_opened.emit(file_path)
+            
+            self._file_watcher.addPath(file_path)
             
             self._ctags_handler.index_file_async(file_path)
             
@@ -240,17 +254,25 @@ class EditorManager(QObject):
             return self.save_editor_as(editor)
         
         try:
-            with open(info["file_path"], 'w', encoding='utf-8') as f:
+            file_path = info["file_path"]
+            if file_path in self._file_watcher.files():
+                self._file_watcher.removePath(file_path)
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(editor.text())
+            
+            info["original_content"] = editor.text()
             
             editor.setModified(False)
             info["modified"] = False
             self._update_tab_title(editor)
             self._set_tab_color(info["index"], "saved")
             
-            self.file_saved.emit(info["file_path"])
+            self._file_watcher.addPath(file_path)
             
-            self._ctags_handler.index_file_async(info["file_path"])
+            self.file_saved.emit(file_path)
+            
+            self._ctags_handler.index_file_async(file_path)
             
             return True
             
@@ -298,8 +320,16 @@ class EditorManager(QObject):
                     success = False
         return success
     
-    def close_editor(self, index: int) -> bool:
+    def close_editor(self, index_or_editor=None) -> bool:
         """Close editor at specified index."""
+        if index_or_editor is None:
+            index = self._tab_widget.currentIndex()
+        elif isinstance(index_or_editor, int):
+            index = index_or_editor
+        else:
+            editor = index_or_editor
+            index = self.editors.get(editor, {}).get("index", -1)
+        
         if index < 0 or index >= self._tab_widget.count():
             return False
         
@@ -312,26 +342,25 @@ class EditorManager(QObject):
         is_empty = self._is_untitled_empty(editor)
         
         if editor.isModified() and not is_empty:
-            tab_name = self._tab_widget.tabText(index).rstrip('*')
+            file_name = Path(info["file_path"]).name if info["file_path"] else "Untitled"
             reply = QMessageBox.question(
                 self._parent,
-                "Save Changes",
-                f"Do you want to save changes to {tab_name}?",
-                QMessageBox.StandardButton.Save |
-                QMessageBox.StandardButton.Discard |
+                "Save Changes?",
+                f"Do you want to save changes to {file_name}?",
+                QMessageBox.StandardButton.Save | 
+                QMessageBox.StandardButton.Discard | 
                 QMessageBox.StandardButton.Cancel
             )
             
-            if reply == QMessageBox.StandardButton.Save:
+            if reply == QMessageBox.StandardButton.Cancel:
+                return False
+            elif reply == QMessageBox.StandardButton.Save:
                 if not self.save_editor(editor):
                     return False
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return False
         
         file_path = info["file_path"]
-        
-        if info.get("untitled_number"):
-            self._release_untitled_number(info["untitled_number"])
+        if file_path and file_path in self._file_watcher.files():
+            self._file_watcher.removePath(file_path)
         
         # Track closed files (only real files, not Untitled)
         if file_path:
@@ -369,6 +398,11 @@ class EditorManager(QObject):
         
         file_path = self._closed_files.pop()
         return self.open_editor(file_path)
+    
+    def discard_all_changes(self) -> None:
+        """Mark all editors as not modified (discard changes without saving)"""
+        for editor in list(self.editors.keys()):
+            editor.setModified(False)
     
     # ========== Editor Actions ==========
     
@@ -588,8 +622,9 @@ class EditorManager(QObject):
     
     def get_editor_by_path(self, file_path: str) -> Optional[CodeEditor]:
         """Find an editor by its file path."""
+        normalized_path = self._normalize_path(file_path)
         for editor, info in self.editors.items():
-            if info["file_path"] == file_path:
+            if self._normalize_path(info["file_path"]) == normalized_path:
                 return editor
         return None
     
@@ -654,10 +689,20 @@ class EditorManager(QObject):
         """Handle text change in an editor."""
         editor = self.sender()
         if editor in self.editors:
-            self.editors[editor]["modified"] = True
-            self._update_tab_title(editor)
-            self._set_tab_color(self.editors[editor]["index"], "modified")
-            self.content_modified.emit()
+            info = self.editors[editor]
+            current_text = editor.text()
+            original_content = info.get("original_content", "")
+            
+            # Check if content matches original (user undid all changes)
+            if current_text == original_content:
+                info["modified"] = False
+                self._update_tab_title(editor)
+                self._set_tab_color(info["index"], "saved")
+            else:
+                info["modified"] = True
+                self._update_tab_title(editor)
+                self._set_tab_color(info["index"], "modified")
+                self.content_modified.emit()
     
     def _on_cursor_changed(self):
         """Handle cursor position change."""
@@ -753,3 +798,104 @@ class EditorManager(QObject):
             
             apis.prepare()
             editor.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+    
+    def _on_file_changed_external(self, file_path: str):
+        """Handle external file change notification."""
+        self._pending_file_changes.add(file_path)
+        # Debounce - wait 500ms before processing
+        self._file_change_timer.start(500)
+    
+    def _process_pending_file_changes(self):
+        """Process pending file changes after debounce."""
+        for file_path in list(self._pending_file_changes):
+            self._handle_external_file_change(file_path)
+        self._pending_file_changes.clear()
+    
+    def _handle_external_file_change(self, file_path: str):
+        """Handle a single external file change."""
+        import os
+        
+        # Find the editor for this file
+        editor = self.get_editor_by_path(file_path)
+        if not editor:
+            return
+        
+        info = self.editors.get(editor)
+        if not info:
+            return
+        
+        # Check if file still exists
+        if not os.path.exists(file_path):
+            reply = QMessageBox.warning(
+                self._parent,
+                "File Deleted",
+                f"The file '{Path(file_path).name}' has been deleted from disk.\n\n"
+                "Do you want to keep the editor open?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                self.close_editor(editor)
+            return
+        
+        # Read new content
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                new_content = f.read()
+        except Exception:
+            return
+        
+        # Check if content actually changed
+        if new_content == info.get("original_content", ""):
+            # Re-add to watcher (Qt removes path after change notification)
+            if file_path not in self._file_watcher.files():
+                self._file_watcher.addPath(file_path)
+            return
+        
+        # Ask user what to do
+        if info["modified"]:
+            reply = QMessageBox.question(
+                self._parent,
+                "File Changed",
+                f"The file '{Path(file_path).name}' has been changed externally.\n\n"
+                "You have unsaved changes. Do you want to reload and lose your changes?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+        else:
+            reply = QMessageBox.question(
+                self._parent,
+                "File Changed",
+                f"The file '{Path(file_path).name}' has been changed externally.\n\n"
+                "Do you want to reload?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Reload file
+            editor.setText(new_content)
+            editor.setModified(False)
+            info["modified"] = False
+            info["original_content"] = new_content
+            self._update_tab_title(editor)
+            self._set_tab_color(info["index"], "saved")
+        
+        # Re-add to watcher (Qt removes path after change notification)
+        if file_path not in self._file_watcher.files():
+            self._file_watcher.addPath(file_path)
+    
+    def _setup_tab_shortcuts(self):
+        """Setup Ctrl+1-9 shortcuts for switching tabs."""
+        for i in range(1, 10):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{i}"), self._parent)
+            shortcut.activated.connect(lambda idx=i-1: self._switch_to_tab_index(idx))
+    
+    def _switch_to_tab_index(self, index: int):
+        """Switch to tab at given index if it exists."""
+        if 0 <= index < self._tab_widget.count():
+            self._tab_widget.setCurrentIndex(index)
+    
+    def _normalize_path(self, file_path: str) -> str:
+        """Normalize file path for consistent comparison."""
+        import os
+        if file_path:
+            return os.path.normpath(os.path.abspath(file_path)).lower()
+        return ""
