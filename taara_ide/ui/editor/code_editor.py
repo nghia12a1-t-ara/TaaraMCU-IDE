@@ -165,6 +165,13 @@ class CodeEditor(QsciScintilla):
         self.highlight_indicator = 0
         self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, self.highlight_indicator)
         self.setIndicatorDrawUnder(True, self.highlight_indicator)
+        # self.setIndicatorForegroundColor(QColor("#264F78"), self.highlight_indicator)
+        
+        self.search_indicator = 1
+        self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, self.search_indicator)
+        self.setIndicatorDrawUnder(True, self.search_indicator)
+        self.setIndicatorForegroundColor(QColor("#FFA500"), self.search_indicator)  # Orange color
+        self.setIndicatorOutlineColor(QColor("#FF8C00"), self.search_indicator)  # Dark orange outline
         
         # Hotspot for Ctrl+Click
         HOTSPOT_STYLE = 10
@@ -560,6 +567,53 @@ class CodeEditor(QsciScintilla):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not save file: {e}")
             return False
+    
+    def highlight_search_matches(self, search_text: str, case_sensitive: bool = False, 
+                                  whole_word: bool = False, use_regex: bool = False):
+        """Highlight all occurrences of search text in the editor"""
+        self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.search_indicator)
+        self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, self.length())
+        
+        if not search_text:
+            return
+        
+        flags = 0
+        if case_sensitive:
+            flags |= QsciScintilla.SCFIND_MATCHCASE
+        if whole_word:
+            flags |= QsciScintilla.SCFIND_WHOLEWORD
+        if use_regex:
+            flags |= QsciScintilla.SCFIND_REGEXP
+        
+        self.SendScintilla(self.SCI_SETSEARCHFLAGS, flags)
+        
+        full_text = self.text()
+        text_bytes = full_text.encode('utf-8')
+        text_length = len(text_bytes)
+        search_bytes = search_text.encode('utf-8')
+        search_pos = 0
+        
+        while search_pos < text_length:
+            self.SendScintilla(self.SCI_SETTARGETSTART, search_pos)
+            self.SendScintilla(self.SCI_SETTARGETEND, text_length)
+            
+            found_pos = self.SendScintilla(self.SCI_SEARCHINTARGET, 
+                                          len(search_bytes), search_bytes)
+            if found_pos == -1:
+                break
+            
+            match_end = self.SendScintilla(self.SCI_GETTARGETEND)
+            match_len = match_end - found_pos
+            
+            self.SendScintilla(self.SCI_INDICATORFILLRANGE, found_pos, match_len)
+            search_pos = found_pos + max(match_len, 1)
+        
+        self.SendScintilla(self.SCI_SETSEARCHFLAGS, 0)
+    
+    def clear_search_highlights(self):
+        """Clear all search highlights"""
+        self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.search_indicator)
+        self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, self.length())
     
     # Compatibility methods for EditorManager
     

@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         # Search panel (index 1)
         self._search_panel = SearchPanel(self)
         self._search_panel.file_requested.connect(self._on_search_file_requested)
+        self._search_panel.search_term_changed.connect(self._on_search_term_changed)
         self._sidebar_stack.addWidget(self._search_panel)  # Index 1: Search
         
         # Git panel (index 2)
@@ -255,6 +256,18 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_editor_manager'):
             self._editor_manager.open_file_at_line(file_path, line_num, 0)
     
+    def _on_search_term_changed(self, term: str, case_sensitive: bool, whole_word: bool, use_regex: bool):
+        """Highlight search matches in current editor"""
+        editor = self._editor_manager.get_current_editor()
+        if editor:
+            editor.highlight_search_matches(term, case_sensitive, whole_word, use_regex)
+        
+        # Store current search params for when switching tabs
+        self._current_search_term = term
+        self._current_search_case = case_sensitive
+        self._current_search_word = whole_word
+        self._current_search_regex = use_regex
+    
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels"""
         self._terminal = Terminal(self)
@@ -332,6 +345,14 @@ class MainWindow(QMainWindow):
         # Update function list if available
         if self._function_list and file_path:
             self._editor_manager.ctags_handler.index_file_async(file_path)
+        
+        if hasattr(self, '_current_search_term') and self._current_search_term:
+            editor.highlight_search_matches(
+                self._current_search_term,
+                getattr(self, '_current_search_case', False),
+                getattr(self, '_current_search_word', False),
+                getattr(self, '_current_search_regex', False)
+            )
     
     def _on_file_opened(self, file_path: str) -> None:
         """Handle file opened"""

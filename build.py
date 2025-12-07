@@ -47,9 +47,11 @@ def create_shortcut():
     try:
         import win32com.client
     except ImportError:
-        print("[!] pywin32 is not installed. Please setup: pip install pywin32")
+        print("[!] pywin32 chưa cài. Cài: pip install pywin32")
         return
+
     shell = win32com.client.Dispatch("WScript.Shell")
+
     root = str(ROOT)
     target = os.path.join(root, "dependencies", f"{APP_NAME}.exe")
     shortcut_path = os.path.join(root, f"{APP_NAME}.lnk")
@@ -57,10 +59,13 @@ def create_shortcut():
     shortcut = shell.CreateShortCut(shortcut_path)
     shortcut.Targetpath = target
     shortcut.WorkingDirectory = os.path.dirname(target)
-    shortcut.IconLocation = target
+
+    # ✅ FIX ICON
+    shortcut.IconLocation = os.path.join(root, "taara_ide", "icons", "logoIcon.ico")
+
     shortcut.save()
 
-    print(f"[OK] Shortcut created: {shortcut_path}")
+    print(f"[OK] Shortcut created with icon: {shortcut_path} - location {shortcut.IconLocation}")
 
 # ===============================
 # BUILD
