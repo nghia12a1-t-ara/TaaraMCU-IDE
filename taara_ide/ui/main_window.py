@@ -97,12 +97,7 @@ class MainWindow(QMainWindow):
         """Configure main window properties"""
         self.setWindowTitle(f"{AppConstants.APP_NAME} - {AppConstants.VERSION}")
         self.setMinimumSize(1024, 768)
-        
-        # Set window icon if available
-        try:
-            self.setWindowIcon(QIcon(resource_path("icons/logoIcon.ico")))
-        except Exception:
-            pass
+        self.setWindowIcon(QIcon(resource_path("icons/logoIcon.ico")))
     
     def _setup_ui(self) -> None:
         """Set up the main UI layout"""

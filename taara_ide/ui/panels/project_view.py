@@ -123,49 +123,70 @@ class ProjectView(QDockWidget):
             QDir.Filter.Dirs
         )
         
-        # Filter to highlight source files
-        self._model.setNameFilters([
-            "*.c", "*.cpp", "*.h", "*.hpp", 
-            "*.py", "*.s", "*.S", "*.asm"
-        ])
-        self._model.setNameFilterDisables(True)
+        # Show all files, don't use name filter to disable any
+        # Previously this was causing non-code files to be unselectable
+        self._model.setNameFilterDisables(False)
         
-        # Create tree view
+        # Setup and configure the tree view
+        self._setup_tree_view()
+        
+        layout.addWidget(self._tree)
+        self.setWidget(container)
+    
+    def _setup_tree_view(self):
+        """Setup and configure the tree view."""
         self._tree = QTreeView()
         self._tree.setModel(self._model)
-        self._tree.setRootIndex(self._model.index(""))
         
-        # Hide unnecessary columns
-        self._tree.hideColumn(1)  # Size
-        self._tree.hideColumn(2)  # Type
-        self._tree.hideColumn(3)  # Date Modified
-        self._tree.header().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
-        )
-        
+        # Hide columns except name
+        for i in range(1, self._model.columnCount()):
+            self._tree.hideColumn(i)
+            
+        self._tree.setHeaderHidden(True)
+        self._tree.setAnimated(True)
+        self._tree.setIndentation(20)
+        self._tree.setSortingEnabled(True)
+        self._tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         
-        # Style tree view
+        self._tree.setSelectionMode(QTreeView.SelectionMode.SingleSelection)
+        self._tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
+        self._tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
         self._tree.setStyleSheet("""
             QTreeView {
                 background-color: #1e1e1e;
                 color: #cccccc;
                 border: none;
+                outline: none;
             }
             QTreeView::item {
                 padding: 2px 0;
+                border: none;
             }
             QTreeView::item:hover {
                 background-color: #2a2d2e;
             }
             QTreeView::item:selected {
                 background-color: #094771;
+                color: #ffffff;
+            }
+            QTreeView::item:selected:active {
+                background-color: #094771;
+                color: #ffffff;
+            }
+            QTreeView::item:selected:!active {
+                background-color: #37373d;
+                color: #ffffff;
+            }
+            QTreeView::branch:selected {
+                background-color: #094771;
+            }
+            QTreeView::branch:selected:!active {
+                background-color: #37373d;
             }
         """)
         
-        layout.addWidget(self._tree)
-        self.setWidget(container)
-    
     def _setup_context_menu(self):
         """Setup the right-click context menu."""
         self._context_menu = QMenu(self)
@@ -270,6 +291,8 @@ class ProjectView(QDockWidget):
     def _on_item_clicked(self, index: QModelIndex):
         """Handle single-click on item - expand/collapse folders, open files."""
         file_path = self._model.filePath(index)
+        
+        self._tree.setCurrentIndex(index)
         
         if os.path.isdir(file_path):
             if self._tree.isExpanded(index):

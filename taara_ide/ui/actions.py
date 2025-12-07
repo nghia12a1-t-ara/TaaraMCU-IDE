@@ -39,7 +39,7 @@ ACTION_DEFINITIONS = {
     "file.save": ActionDefinition("file.save", "Save", "Ctrl+S", "icons/save.svg"),
     "file.save_as": ActionDefinition("file.save_as", "Save As...", "Ctrl+Shift+S"),
     "file.close_tab": ActionDefinition("file.close_tab", "Close Tab", "Ctrl+F4"),
-    "file.reopen": ActionDefinition("file.reopen", "Reopen Last Closed", "Ctrl+H"),
+    "file.reopen": ActionDefinition("file.reopen", "Reopen Last Closed", "Ctrl+Shift+T"),
     "file.exit": ActionDefinition("file.exit", "Exit", "Alt+F4"),
     
     # Edit actions
