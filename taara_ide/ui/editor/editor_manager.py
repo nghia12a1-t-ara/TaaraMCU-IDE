@@ -797,7 +797,7 @@ class EditorManager(QObject):
                     apis.add(symbol)
             
             apis.prepare()
-            editor.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAPIs)
+            editor.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)
     
     def _on_file_changed_external(self, file_path: str):
         """Handle external file change notification."""

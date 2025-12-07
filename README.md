@@ -7,7 +7,7 @@
 - **Modern UI**: Activity Bar, breadcrumb navigation, and customizable panels
 - **Code Intelligence**: 
   - Syntax highlighting with QScintilla
-  - Auto-completion powered by CTags
+  - Smart auto-completion with APIs and call tips
   - Go-to-definition (Ctrl+Click)
   - Function list sidebar
 - **Project Management**:
@@ -114,11 +114,56 @@ taara-ide/
 - **Function List**: View functions/classes in current file (right panel)
 - **Breadcrumb**: See current file path and context (top bar)
 
+### Auto-completion and Call Tips
+
+The editor provides intelligent code completion and function signature hints:
+
+**Auto-completion** (triggered automatically as you type):
+- Shows suggestions for keywords, APIs, and symbols
+- Case-insensitive matching
+- Press **Tab** or **Enter** to accept suggestion
+- Arrow keys to navigate suggestions
+- **Esc** to dismiss
+
+**Call Tips** (function signatures):
+- Automatically shows when typing function calls
+- Displays function signatures with parameters
+- Shows up to 3 overloads if available
+- Press **Esc** to dismiss
+
+**Example for C/C++:**
+\`\`\`c
+// Auto-completion for standard functions
+prin<Tab>  // completes to "printf("
+std::vec<Tab>  // completes to "std::vector<"
+
+// Call tips show function signatures
+printf(  // Shows: printf(const char *format, ...)
+malloc(  // Shows: malloc(size_t size)
+\`\`\`
+
+**Example for Python:**
+\`\`\`python
+# Auto-completion for built-in functions
+pri<Tab>  // completes to "print("
+le<Tab>  // completes to "len("
+
+# Call tips show function signatures
+print(  // Shows: print(*args, sep=' ', end='\n', file=sys.stdout)
+str.split(  // Shows: split(sep=None, maxsplit=-1)
+\`\`\`
+
+**Customizing Auto-completion:**
+- Auto-completion triggers after typing 2 characters
+- Supports both document words and API definitions
+- You can add custom APIs by modifying language-specific settings
+
 ### View Options
 
 - **Word Wrap**: Toggle line wrapping
 - **Show All Characters**: Show whitespace and special characters
 - **Function List**: Toggle function list panel
+- **Terminal**: Toggle integrated terminal (Ctrl+T)
 
 ### Keyboard Shortcuts
 
@@ -130,9 +175,11 @@ taara-ide/
 | Save | Ctrl+S |
 | Save As | Ctrl+Shift+S |
 | Close Tab | Ctrl+W |
+| Switch Tabs | Ctrl+1-9 |
 | Go to Definition | Ctrl+Click |
 | Find | Ctrl+F |
 | Replace | Ctrl+H |
+| Toggle Terminal | Ctrl+T |
 
 ## Configuration
 
@@ -199,27 +246,3 @@ For issues and feature requests, please use the [GitHub Issues](../../issues) pa
 ## Credits
 
 Developed by the Taara MCU team for embedded systems developers.
-\`\`\`
-
-```text file="LICENSE"
-MIT License
-
-Copyright (c) 2025 Taara MCU
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

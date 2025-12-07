@@ -4,19 +4,18 @@ Professional syntax highlighting and code editing features.
 """
 
 from PyQt6.Qsci import QsciScintilla, QsciLexerCPP, QsciLexerPython, QsciAPIs
-from PyQt6.QtGui import QFont, QColor, QMouseEvent
+from PyQt6.QtGui import QFont, QColor, QMouseEvent, QFontMetrics, QFontDatabase  # Added QFontDatabase
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal as Signal
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox, QApplication
 from pathlib import Path
 import json
 import os
 from typing import Optional, TYPE_CHECKING
-
 from taara_ide.utils.resource import resource_path
+from taara_ide.ui.editor.autocomplete_manager import AutocompleteManager
 
 if TYPE_CHECKING:
     from taara_ide.ui.main_window import MainWindow
-
 
 class CodeEditor(QsciScintilla):
     """
@@ -31,8 +30,8 @@ class CodeEditor(QsciScintilla):
         - Bracket matching
         - Go to definition (Ctrl+Click)
         - Auto-indentation
-        - Auto-completion
-        - Call tips
+        - Enhanced auto-completion with APIs
+        - Enhanced call tips with function signatures
         - Comment toggle
         - Zoom support
     
@@ -44,36 +43,93 @@ class CodeEditor(QsciScintilla):
     cursor_changed = Signal(int, int)  # line, column
     modification_changed = Signal(bool)
     
-    def __init__(self, parent: Optional['MainWindow'] = None, 
-                 theme_name: str = "khaki", language: str = "CPP"):
+    def __init__(self, parent=None):
+        """Initialize code editor."""
         super().__init__(parent)
-        self.GUI = parent
+        
+        self._parent = parent
         self.file_path: Optional[str] = None
-        self._language = language
+        self._language = "cpp"
+        self.lexer = None
         
-        # Font configuration
-        self.text_font = QFont("Consolas", 14)
-        self.margin_font = QFont("Consolas", 14)
+        # Setup font
+        self._setup_font()
         
-        # Load theme first
-        self.theme = self._load_theme(theme_name.lower() + ".json")
+        # Load theme
+        self.theme = self._load_theme("khaki.json")
         
-        self._setup_lexer(language)
+        # Setup lexer first
+        self._setup_lexer(self._language)
         self._apply_theme()
         
-        # Apply font to all styles
+        # Apply font to all lexer styles
         for style in range(128):
             self.lexer.setFont(self.text_font, style)
         
-        # Apply lexer to QScintilla AFTER theme is applied
+        self.autocomplete_manager = AutocompleteManager(self)
+        self.autocomplete_manager.setup_apis(self.lexer)
+        
+        # Now set the lexer (with APIs already configured)
         self.setLexer(self.lexer)
         
+        # Setup autocompletion and call tips settings
+        self.autocomplete_manager.setup_autocompletion()
+        self.autocomplete_manager.setup_calltips()
+        
+        # Apply paper color after setLexer
         if self.theme:
             colors = self.theme.get("colors", {})
             editor_bg = colors.get("editor.background", "#D7D7AF")
             self.setPaper(QColor(editor_bg))
         
-        # Line number margin configuration
+        # Setup editor UI
+        self._setup_margins()
+        self._setup_editing()
+        self._setup_indicators()
+        
+        # Connect signals
+        self._connect_signals()
+    
+    def _setup_font(self):
+        """Setup editor fonts with fallback."""
+        font_families = ["Consolas", "Courier New", "Monospace"]
+        available_fonts = QFontDatabase.families()
+        available_font = None
+        
+        for family in font_families:
+            if family in available_fonts:
+                available_font = family
+                break
+        
+        if not available_font:
+            available_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+        
+        self.text_font = QFont(available_font, 14)
+        self.text_font.setStyleHint(QFont.StyleHint.Monospace)
+        self.text_font.setFixedPitch(True)
+        
+        self.margin_font = QFont(available_font, 14)
+        self.margin_font.setStyleHint(QFont.StyleHint.Monospace)
+        self.margin_font.setFixedPitch(True)
+        
+        self.setFont(self.text_font)
+    
+    def _setup_lexer(self, language: str):
+        """Setup syntax highlighting lexer."""
+        language_lower = language.lower()
+        
+        if language_lower in ["cpp", "c", "c++"]:
+            self.lexer = QsciLexerCPP(self)
+        elif language_lower == "python":
+            self.lexer = QsciLexerPython(self)
+        else:
+            self.lexer = QsciLexerCPP(self)
+        
+        self.lexer.setDefaultFont(self.text_font)
+    
+    def _setup_margins(self):
+        """Setup editor margins."""
+        # Line number margin
         self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
         self.setMarginWidth(0, "00000")
         self.setMarginsForegroundColor(QColor("#2B2B2B"))
@@ -83,18 +139,13 @@ class CodeEditor(QsciScintilla):
         # Separator margin
         self.setMarginType(1, QsciScintilla.MarginType.SymbolMargin)
         self.setMarginWidth(1, 10)
-        
+    
+    def _setup_editing(self):
+        """Setup editing features."""
         # Current line highlighting
         self.setCaretLineVisible(True)
         
-        # Configure search indicators
-        self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, 0)
-        self.setIndicatorDrawUnder(True, 0)
-        
-        # Set global font
-        self.setFont(self.text_font)
-        
-        # Configure tab and indentation
+        # Tab and indentation
         self.setIndentationsUseTabs(False)
         self.setTabWidth(4)
         self.setIndentationGuides(True)
@@ -105,55 +156,37 @@ class CodeEditor(QsciScintilla):
         self.horizontalScrollBar().setSingleStep(20)
         self.horizontalScrollBar().setPageStep(100)
         
-        # Mouse tracking for word highlighting
+        # Mouse tracking
         self.setMouseTracking(True)
         self.last_highlighted_word = None
-        
-        # Auto completion
-        self.setAutoCompletionSource(QsciScintilla.AutoCompletionSource.AcsAll)
-        self.setAutoCompletionThreshold(2)
-        
-        # Call tips
-        self.setCallTipsVisible(3)
-        self.setCallTipsStyle(QsciScintilla.CallTipsStyle.CallTipsContext)
-        self.setCallTipsPosition(QsciScintilla.CallTipsPosition.CallTipsAboveText)
-        self.setCallTipsBackgroundColor(QColor("#222831"))
-        self.setCallTipsForegroundColor(QColor("#EEEEEE"))
-        self.setCallTipsHighlightColor(QColor("#00ADB5"))
-        
-        # Configure highlight indicator
-        self.highlight_indicator = 8
-        self.SendScintilla(self.SCI_INDICSETSTYLE, self.highlight_indicator, 
-                          QsciScintilla.INDIC_BOX)
-        color = QColor("#FF5733")
-        color_int = (color.red() << 16) | (color.green() << 8) | color.blue()
-        self.SendScintilla(self.SCI_INDICSETFORE, self.highlight_indicator, color_int)
-        
-        # Connect cursor position changed
-        self.cursorPositionChanged.connect(self._on_cursor_changed)
-        self.cursorPositionChanged.connect(self._highlight_current_word)
+    
+    def _setup_indicators(self):
+        """Setup search and highlight indicators."""
+        self.highlight_indicator = 0
+        self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, self.highlight_indicator)
+        self.setIndicatorDrawUnder(True, self.highlight_indicator)
         
         # Hotspot for Ctrl+Click
         HOTSPOT_STYLE = 10
         self.SendScintilla(QsciScintilla.SCI_STYLESETHOTSPOT, HOTSPOT_STYLE, True)
+    
+    def _connect_signals(self):
+        """Connect editor signals."""
+        # Cursor position
+        self.cursorPositionChanged.connect(self._on_cursor_changed)
+        self.cursorPositionChanged.connect(self._highlight_current_word)
         
-        # Timer for deferred updates
+        self.textChanged.connect(self.autocomplete_manager.on_text_changed)
+        
+        # Modification tracking
+        self.modificationChanged.connect(self._on_modification_changed)
+        
+        # Deferred updates
         self.update_timer = QTimer(self)
         self.update_timer.setSingleShot(True)
         self.update_timer.timeout.connect(self._deferred_update)
         self.cursorPositionChanged.connect(self._schedule_update)
         self.textChanged.connect(self._schedule_update)
-        
-        # Track modification
-        self.modificationChanged.connect(self._on_modification_changed)
-    
-    def _setup_lexer(self, language: str):
-        """Setup syntax lexer based on language."""
-        if language.upper() == "PYTHON":
-            self.lexer = QsciLexerPython()
-        else:
-            self.lexer = QsciLexerCPP()
-        self.lexer.setDefaultFont(self.text_font)
     
     def _schedule_update(self):
         """Schedule deferred update."""
@@ -161,8 +194,8 @@ class CodeEditor(QsciScintilla):
     
     def _deferred_update(self):
         """Deferred status bar update."""
-        if self.GUI and hasattr(self.GUI, 'update_status_bar'):
-            self.GUI.update_status_bar()
+        line, index = self.getCursorPosition()
+        self.cursor_changed.emit(line + 1, index + 1)
     
     def _on_cursor_changed(self, line: int, index: int):
         """Handle cursor position change."""
@@ -202,7 +235,6 @@ class CodeEditor(QsciScintilla):
     def _load_theme(self, theme_file: str) -> Optional[dict]:
         """Load theme from JSON file."""
         try:
-            # Try multiple paths
             paths = [
                 Path(__file__).parent / "themes" / theme_file,
                 Path(resource_path("themes")) / theme_file,
@@ -240,7 +272,7 @@ class CodeEditor(QsciScintilla):
             self.lexer.setPaper(bg_color, style)
             self.lexer.setColor(fg_color, style)
         
-        # Map token colors to Scintilla styles for CPP
+        # Map token colors to Scintilla styles
         if isinstance(self.lexer, QsciLexerCPP):
             style_map = {
                 "comment": [QsciLexerCPP.Comment, QsciLexerCPP.CommentLine, 
@@ -270,7 +302,7 @@ class CodeEditor(QsciScintilla):
         else:
             style_map = {}
         
-        # Apply token colors (only foreground, keep background consistent)
+        # Apply token colors
         for token in token_colors:
             scope = token.get("scope", "")
             settings = token.get("settings", {})
@@ -298,15 +330,16 @@ class CodeEditor(QsciScintilla):
         self.setMarginsForegroundColor(QColor(colors.get("editorLineNumber.foreground", "#000000")))
         self.setMarginsBackgroundColor(QColor(margin_bg))
         
-        # Set indent guides color
+        # Indent guides color
         indent_color = colors.get("editorIndentGuide.background", "#586E7580")
         self.setIndentationGuidesBackgroundColor(QColor(indent_color))
         self.setIndentationGuidesForegroundColor(QColor(indent_color))
         
-        # Set whitespace color
+        # Whitespace color
         ws_color = colors.get("editorWhitespace.foreground", "#586E7580")
         self.setWhitespaceForegroundColor(QColor(ws_color))
         
+        # Brace matching
         self.setMatchedBraceBackgroundColor(QColor(colors.get("editor.selectionBackground", "#D7FF87")))
         self.setMatchedBraceForegroundColor(fg_color)
         self.setUnmatchedBraceBackgroundColor(QColor("#FF0000"))
@@ -318,8 +351,11 @@ class CodeEditor(QsciScintilla):
         self._setup_lexer(language)
         self.lexer.setDefaultFont(self.text_font)
         self._apply_theme()
+        
         for style in range(128):
             self.lexer.setFont(self.text_font, style)
+        
+        self.autocomplete_manager.setup_apis(self.lexer)
         self.setLexer(self.lexer)
         
         if self.theme:
@@ -334,6 +370,8 @@ class CodeEditor(QsciScintilla):
             self._apply_theme()
             for style in range(128):
                 self.lexer.setFont(self.text_font, style)
+            
+            self.autocomplete_manager.setup_apis(self.lexer)
             self.setLexer(self.lexer)
             
             colors = self.theme.get("colors", {})
@@ -366,7 +404,6 @@ class CodeEditor(QsciScintilla):
         new_lines = []
         for line_text in lines:
             if all_commented:
-                # Remove comment
                 stripped = line_text.lstrip()
                 if stripped.startswith("// "):
                     new_lines.append(line_text.replace("// ", "", 1))
@@ -422,22 +459,23 @@ class CodeEditor(QsciScintilla):
     def mousePressEvent(self, event: QMouseEvent):
         """Handle mouse press for Ctrl+Click go to definition."""
         if event.button() == Qt.MouseButton.LeftButton:
-            x = event.pos().x()
-            y = event.pos().y()
-            position = self.SendScintilla(QsciScintilla.SCI_POSITIONFROMPOINT, x, y)
+            position = self.SendScintilla(
+                QsciScintilla.SCI_POSITIONFROMPOINT,
+                int(event.position().x()), int(event.position().y()))
             
             line = self.SendScintilla(QsciScintilla.SCI_LINEFROMPOSITION, position)
             index = position - self.SendScintilla(
                 QsciScintilla.SCI_POSITIONFROMLINE, line)
             self.setCursorPosition(line, index)
             
-            # Check Ctrl+Click for go to definition
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 word = self.get_word_at_position(position)
-                if word and self.GUI:
-                    # Emit signal or call handler
-                    if hasattr(self.GUI, '_editor_manager'):
-                        self.GUI._editor_manager.goto_definition(word)
+                if word and self._parent:
+                    main_window = self._parent
+                    while main_window and not hasattr(main_window, '_editor_manager'):
+                        main_window = main_window.parent() if hasattr(main_window, 'parent') else None
+                    if main_window and hasattr(main_window, '_editor_manager'):
+                        main_window._editor_manager.goto_definition(word)
                     return
         
         super().mousePressEvent(event)
@@ -476,6 +514,7 @@ class CodeEditor(QsciScintilla):
         self.ensureLineVisible(line_number - 1)
 
     def goto_line_and_select(self, line_number: int):
+        """Navigate to line and select it."""
         if line_number < 0 or line_number >= self.lines():
             return
         start_pos = self.SendScintilla(self.SCI_POSITIONFROMLINE, line_number)
