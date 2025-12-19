@@ -15,10 +15,10 @@ Choose the default installation location.
 ### 2. Build Requirements
 
 Make sure you have all build dependencies:
-\`\`\`bash
+```bash
 pip install -r requirements.txt
 pip install nuitka ordered-set zstandard
-\`\`\`
+```
 
 ## Quick Start
 
@@ -26,9 +26,9 @@ pip install nuitka ordered-set zstandard
 
 Run the automated installer creation script:
 
-\`\`\`bash
+```bash
 python create_installer.py
-\`\`\`
+```
 
 This script will:
 1. Check if Inno Setup is installed
@@ -39,14 +39,14 @@ This script will:
 ### Option 2: Manual Steps
 
 1. **Build the application**:
-   \`\`\`bash
+   ```bash
    python build.py
-   \`\`\`
+   ```
 
 2. **Compile installer** (if Inno Setup is in PATH):
-   \`\`\`bash
+   ```bash
    iscc installer.iss
-   \`\`\`
+   ```
    
    Or use the GUI:
    - Open `installer.iss` in Inno Setup Compiler

@@ -37,51 +37,51 @@ Download the latest installer from [Releases](../../releases) and run it. No Pyt
 #### Setup
 
 1. Clone the repository:
-   \`\`\`bash
+   ```bash
    git clone https://github.com/yourusername/taara-ide.git
    cd taara-ide
-   \`\`\`
+   ```
 
 2. Install dependencies:
-   \`\`\`bash
+   ```bash
    pip install -r taara_ide/requirements.txt
-   \`\`\`
+   ```
 
 3. Run the IDE:
-   \`\`\`bash
+   ```bash
    python run.py
-   \`\`\`
+   ```
 
 ## Building
 
 ### Development Build
 
 For quick testing:
-\`\`\`bash
+```bash
 python build_dev.py
-\`\`\`
+```
 
 ### Production Build
 
 Create optimized executable:
-\`\`\`bash
+```bash
 python build.py
-\`\`\`
+```
 
 Output: `dist/TaaraIDE.exe`
 
 ### Create Installer
 
 Build a single-file Windows installer:
-\`\`\`bash
+```bash
 python create_installer.py
-\`\`\`
+```
 
 See [INSTALLER.md](INSTALLER.md) for detailed instructions.
 
 ## Project Structure
 
-\`\`\`
+```
 taara-ide/
 ├── taara_ide/              # Main application package
 │   ├── config/             # Configuration and constants
@@ -98,7 +98,7 @@ taara-ide/
 ├── build_dev.py            # Quick development build
 ├── create_installer.py     # Installer creation script
 └── installer.iss           # Inno Setup configuration
-\`\`\`
+```
 
 ## Usage
 
@@ -132,7 +132,7 @@ The editor provides intelligent code completion and function signature hints:
 - Press **Esc** to dismiss
 
 **Example for C/C++:**
-\`\`\`c
+```c
 // Auto-completion for standard functions
 prin<Tab>  // completes to "printf("
 std::vec<Tab>  // completes to "std::vector<"
@@ -140,10 +140,10 @@ std::vec<Tab>  // completes to "std::vector<"
 // Call tips show function signatures
 printf(  // Shows: printf(const char *format, ...)
 malloc(  // Shows: malloc(size_t size)
-\`\`\`
+```
 
 **Example for Python:**
-\`\`\`python
+```python
 # Auto-completion for built-in functions
 pri<Tab>  // completes to "print("
 le<Tab>  // completes to "len("
@@ -151,7 +151,7 @@ le<Tab>  // completes to "len("
 # Call tips show function signatures
 print(  // Shows: print(*args, sep=' ', end='\n', file=sys.stdout)
 str.split(  // Shows: split(sep=None, maxsplit=-1)
-\`\`\`
+```
 
 **Customizing Auto-completion:**
 - Auto-completion triggers after typing 2 characters

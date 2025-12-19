@@ -6,9 +6,9 @@ This document explains how to build Taara IDE into a standalone executable.
 
 1. **Python 3.8+**
 2. **PyQt6** and dependencies installed
-   \`\`\`bash
+   ```bash
    pip install -r taara_ide/requirements.txt
-   \`\`\`
+   ```
 
 3. **C Compiler** (Nuitka requirement)
    - **Windows**: Install Microsoft Visual C++ Build Tools or MinGW-w64
@@ -21,9 +21,9 @@ This document explains how to build Taara IDE into a standalone executable.
 
 Creates a single optimized executable file:
 
-\`\`\`bash
+```bash
 python build.py
-\`\`\`
+```
 
 The executable will be in the `dist/` folder.
 
@@ -39,9 +39,9 @@ The executable will be in the `dist/` folder.
 
 For quick testing during development:
 
-\`\`\`bash
+```bash
 python build_dev.py
-\`\`\`
+```
 
 **Features:**
 - Folder mode (faster to build)
@@ -66,9 +66,9 @@ Edit `build.py` to customize:
 ### Nuitka not found
 The build script will offer to install Nuitka automatically.
 Manual install:
-\`\`\`bash
+```bash
 pip install nuitka ordered-set
-\`\`\`
+```
 
 ### C Compiler not found
 Install a C compiler for your platform (see Prerequisites).

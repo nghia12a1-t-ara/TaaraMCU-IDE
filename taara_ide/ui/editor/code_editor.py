@@ -148,7 +148,10 @@ class CodeEditor(QsciScintilla):
         # Tab and indentation
         self.setIndentationsUseTabs(False)
         self.setTabWidth(4)
-        self.setIndentationGuides(True)
+        
+        self.setBraceMatching(QsciScintilla.BraceMatch.SloppyBraceMatch)
+        
+        # Auto-indentation
         self.setAutoIndent(True)
         self.setBackspaceUnindents(True)
         
@@ -347,10 +350,10 @@ class CodeEditor(QsciScintilla):
         self.setWhitespaceForegroundColor(QColor(ws_color))
         
         # Brace matching
-        self.setMatchedBraceBackgroundColor(QColor(colors.get("editor.selectionBackground", "#D7FF87")))
-        self.setMatchedBraceForegroundColor(fg_color)
-        self.setUnmatchedBraceBackgroundColor(QColor("#FF0000"))
-        self.setUnmatchedBraceForegroundColor(QColor("#FFFFFF"))
+        self.setMatchedBraceBackgroundColor(QColor("#3E3E3E"))  # Dark background
+        self.setMatchedBraceForegroundColor(QColor("#FF0000"))  # Red foreground like VSCode
+        self.setUnmatchedBraceBackgroundColor(QColor("#FF0000"))  # Red background for unmatched
+        self.setUnmatchedBraceForegroundColor(QColor("#FFFFFF"))  # White text for unmatched
     
     def set_language(self, language: str):
         """Change syntax highlighting language."""
