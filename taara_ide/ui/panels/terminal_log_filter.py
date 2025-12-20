@@ -236,10 +236,11 @@ class TerminalLogFilter(QWidget):
         elif index == 2:  # Warnings Only
             filter_data['log_types'] = {'warning'}
         elif index == 3:  # Info Only
-            filter_data['log_types'] = {'info', 'stdout'}
+            filter_data['log_types'] = {'info', 'stdout', 'success'}
         elif index == 4:  # Commands Only
             filter_data['log_types'] = {'command'}
         elif index == 5:  # Custom Pattern
+            filter_data['log_types'] = {'all'}  # Show all types when using custom pattern
             filter_data['custom_pattern'] = self._custom_filter_input.text()
         
         self.filter_changed.emit(filter_data)

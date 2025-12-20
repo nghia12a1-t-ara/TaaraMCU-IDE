@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel, QToolBar, QSplitter
 )
 from PyQt6.QtGui import QColor, QPalette, QFont, QTextCursor, QTextCharFormat, QIcon
-from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal as Signal
+from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal as Signal, QTimer
 import subprocess
 import os
 import queue
@@ -16,6 +16,7 @@ import shlex
 import re
 import sys
 from typing import Optional, Callable, List, TYPE_CHECKING
+from datetime import datetime
 
 from taara_ide.utils.process_utils import get_subprocess_flags
 from taara_ide.ui.panels.serial_port_manager import SerialPortManager
@@ -144,13 +145,24 @@ class Terminal(QDockWidget):
         self._serial_manager = SerialPortManager(self)
         self._serial_mode = False  # Toggle between terminal and serial mode
         
+        self._serial_buffer = bytearray()
+        
         self._log_buffer = []  # Store all log entries for filtering
+        self._max_log_buffer_size = 10000  # Limit to prevent memory issues
+        self._auto_scroll = True
+        
         self._active_filter = {'log_types': {'all'}, 'custom_pattern': ''}
-        self._search_helper = None
+        self._search_helper = None  # Will be initialized after UI setup
+        
+        self._serial_hex_mode = False
+        
+        self._auto_reconnect_enabled = False
         
         self._setup_ui()
         self._connect_signals()
         self._compile_git_patterns()
+        
+        self._search_helper = TerminalSearchHelper(self._output)
     
     def _setup_ui(self):
         """Initialize UI components."""
@@ -175,8 +187,6 @@ class Terminal(QDockWidget):
         self._output.setReadOnly(True)
         self._output.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self._output.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        
-        self._search_helper = TerminalSearchHelper(self._output)
         
         # Style output
         font = QFont("Consolas", 10)
@@ -299,6 +309,13 @@ class Terminal(QDockWidget):
         self._clear_btn.clicked.connect(lambda: self._output.clear())
         serial_settings_layout.addWidget(self._clear_btn)
         
+        self._auto_scroll_btn = QPushButton("Auto Scroll: ON")
+        self._auto_scroll_btn.setCheckable(True)
+        self._auto_scroll_btn.setChecked(True)
+        self._auto_scroll_btn.setToolTip("Toggle auto-scrolling to bottom")
+        self._auto_scroll_btn.clicked.connect(self._toggle_auto_scroll)
+        serial_settings_layout.addWidget(self._auto_scroll_btn)
+        
         # Color config button
         self._color_config_btn = QPushButton()
         self._color_config_btn.setIcon(QIcon.fromTheme("preferences-desktop-color"))
@@ -309,7 +326,6 @@ class Terminal(QDockWidget):
         self._serial_settings_widget.setVisible(False)  # Hidden initially
         toolbar_layout.addWidget(self._serial_settings_widget)
         
-        # Style toolbar
         toolbar_widget.setStyleSheet("""
             QWidget {
                 background-color: #2D2D2D;
@@ -339,6 +355,20 @@ class Terminal(QDockWidget):
                 border-top: 5px solid #CCCCCC;
                 margin-right: 5px;
             }
+            QComboBox QAbstractItemView {
+                background-color: #2D2D2D;
+                color: #CCCCCC;
+                selection-background-color: #007ACC;
+                selection-color: #FFFFFF;
+                border: 1px solid #4C4C4C;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 4px 8px;
+                min-height: 20px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3C3C3C;
+            }
             QPushButton {
                 background-color: #0E639C;
                 color: white;
@@ -356,6 +386,12 @@ class Terminal(QDockWidget):
             QPushButton:disabled {
                 background-color: #4C4C4C;
                 color: #808080;
+            }
+            QPushButton:checked {
+                background-color: #16825D;
+            }
+            QPushButton:checked:hover {
+                background-color: #1E9670;
             }
         """)
         
@@ -380,7 +416,10 @@ class Terminal(QDockWidget):
         self._refresh_ports_btn.clicked.connect(self._refresh_ports)
         self._connect_btn.clicked.connect(self._toggle_serial_connection)
         
-        # TerminalLogFilter widget handles its own signals internally
+        self._filter_widget.filter_changed.connect(self._on_filter_changed)
+        self._filter_widget.search_requested.connect(self._on_search_requested)
+        self._filter_widget.search_next.connect(lambda: self._search_helper.next_match() if self._search_helper else None)
+        self._filter_widget.search_previous.connect(lambda: self._search_helper.previous_match() if self._search_helper else None)
 
     def eventFilter(self, obj, event):
         """Handle key events for command history navigation"""
@@ -474,168 +513,73 @@ class Terminal(QDockWidget):
             self._connect_btn.setStyleSheet("")  # Reset to default style
 
     def _compile_git_patterns(self):
-        """Compile regex patterns for git output highlighting."""
-        self._git_patterns = [
-            # Branch names
-            (re.compile(r'\b(main|master|develop|feature/\S+|bugfix/\S+|hotfix/\S+|release/\S+)\b'), TerminalColors.GIT_BRANCH),
-            (re.compile(r"^\* (.+)$", re.MULTILINE), TerminalColors.GIT_BRANCH),  # Current branch
-            
-            # Commit hashes
-            (re.compile(r'\b([a-f0-9]{7,40})\b'), TerminalColors.GIT_COMMIT),
-            
-            # Remote references
-            (re.compile(r'\b(origin|upstream|remote)/\S+'), TerminalColors.GIT_REMOTE),
-            
-            # Tags
-            (re.compile(r'\btag:\s*(\S+)'), TerminalColors.GIT_TAG),
-            (re.compile(r'^v?\d+\.\d+\.\d+', re.MULTILINE), TerminalColors.GIT_TAG),
-            
-            # HEAD reference
-            (re.compile(r'\bHEAD\b'), TerminalColors.GIT_HEAD),
-            
-            # Git status patterns
-            (re.compile(r'^(\+.*)$', re.MULTILINE), TerminalColors.GIT_ADD),
-            (re.compile(r'^(-.*)$', re.MULTILINE), TerminalColors.GIT_DELETE),
-            (re.compile(r'^\s*M\s+(.+)$', re.MULTILINE), TerminalColors.GIT_MODIFIED),
-            (re.compile(r'^\?\?\s+(.+)$', re.MULTILINE), TerminalColors.GIT_UNTRACKED),
-            (re.compile(r'^\s*A\s+(.+)$', re.MULTILINE), TerminalColors.GIT_ADD),
-            (re.compile(r'^\s*D\s+(.+)$', re.MULTILINE), TerminalColors.GIT_DELETE),
-            
-            # Modified/new file in status
-            (re.compile(r'modified:\s+(.+)$', re.MULTILINE), TerminalColors.GIT_MODIFIED),
-            (re.compile(r'new file:\s+(.+)$', re.MULTILINE), TerminalColors.GIT_ADD),
-            (re.compile(r'deleted:\s+(.+)$', re.MULTILINE), TerminalColors.GIT_DELETE),
-            (re.compile(r'renamed:\s+(.+)$', re.MULTILINE), TerminalColors.GIT_MODIFIED),
-            
-            # Author and date
-            (re.compile(r'^Author:\s*(.+)$', re.MULTILINE), TerminalColors.GIT_AUTHOR),
-            (re.compile(r'^Date:\s*(.+)$', re.MULTILINE), TerminalColors.GIT_DATE),
-            
-            # Diff headers
-            (re.compile(r'^diff --git .+$', re.MULTILINE), TerminalColors.FILE_HEADER),
-            (re.compile(r'^@@.+@@', re.MULTILINE), TerminalColors.GIT_BRANCH),
-            (re.compile(r'^index [a-f0-9]+\.\.[a-f0-9]+', re.MULTILINE), TerminalColors.LINE_NUMBER),
-        ]
+        """Compile regex patterns for git output formatting with optimization."""
+        self._git_combined_pattern = re.compile(r'''
+            (?P<branch>\b(?:main|master|develop|release/\S+|feature/\S+|bugfix/\S+|hotfix/\S+)\b)|
+            (?P<commit>\b[a-f0-9]{7,40}\b)|
+            (?P<remote>origin/\S+)|
+            (?P<tag>v\d+\.\d+\.\d+)|
+            (?P<add>^\+(?!\+\+).*$)|
+            (?P<delete>^-(?!--).*$)|
+            (?P<file_header>^(?:diff|index|---|\+\+\+)\s)|
+            (?P<hunk_header>^@@.*@@)|
+            (?P<status>^\s*(?:modified|deleted|added|renamed|copied):)
+        ''', re.VERBOSE | re.MULTILINE)
     
-    def _execute_input(self):
-        """Execute command from input field."""
-        command = self._input.text().strip()
-        if not command:
-            return
+    def _format_git_output(self, cursor: QTextCursor, text: str):
+        """Format text with git syntax highlighting using combined pattern."""
+        last_pos = 0
+        for match in self._git_combined_pattern.finditer(text):
+            start, end = match.span()
+            
+            # Insert text before the match with default color
+            if start > last_pos:
+                span_text = text[last_pos:start]
+                cursor.insertHtml(f'<span style="color: {TerminalColors.TEXT};">{self._escape_html(span_text)}</span>')
+            
+            # Insert matched text with its specific color
+            for group_name, group_value in match.groupdict().items():
+                if group_value:
+                    color = TerminalColors.TEXT  # Default if not specifically mapped
+                    if group_name == 'branch': color = TerminalColors.GIT_BRANCH
+                    elif group_name == 'commit': color = TerminalColors.GIT_COMMIT
+                    elif group_name == 'remote': color = TerminalColors.GIT_REMOTE
+                    elif group_name == 'tag': color = TerminalColors.GIT_TAG
+                    elif group_name == 'add': color = TerminalColors.GIT_ADD
+                    elif group_name == 'delete': color = TerminalColors.GIT_DELETE
+                    elif group_name == 'file_header': color = TerminalColors.FILE_HEADER
+                    elif group_name == 'hunk_header': color = TerminalColors.GIT_BRANCH
+                    elif group_name == 'status': color = TerminalColors.GIT_MODIFIED # Default for status
+                    
+                    cursor.insertHtml(f'<span style="color: {color};">{self._escape_html(group_value)}</span>')
+                    break # Only apply color for the first matched group
+            
+            last_pos = end
         
-        self._input.clear()
+        # Insert remaining text after the last match
+        if last_pos < len(text):
+            cursor.insertHtml(f'<span style="color: {TerminalColors.TEXT};">{self._escape_html(text[last_pos:])}</span>')
         
-        if not self._command_history or self._command_history[0] != command:
-            self._command_history.insert(0, command)
-        self._history_index = -1
-        
-        if self._serial_mode and self._serial_manager.is_connected():
-            # Send data via serial port
-            if self._serial_manager.send_text(command):
-                self.add_log("command", f"TX: {command}")
-            else:
-                self.add_log("error", "Failed to send data")
-            return
+        cursor.insertHtml("<br>") # Newline after each log entry
+    
+    def _get_log_color(self, log_type: str) -> str:
+        """Get color based on log type."""
+        color_map = {
+            "stdout": TerminalColors.INFO,
+            "stderr": TerminalColors.ERROR,
+            "error": TerminalColors.ERROR,
+            "success": TerminalColors.SUCCESS,
+            "command": TerminalColors.COMMAND,
+            "info": TerminalColors.INFO,
+            "debug": TerminalColors.DEBUG,
+            "warning": TerminalColors.WARNING,
+        }
+        return color_map.get(log_type, TerminalColors.INFO)
+    
+    def _escape_html(self, text: str) -> str:
+        """Escape HTML special characters."""
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
 
-        # Handle built-in commands
-        if self._handle_builtin(command):
-            return
-        
-        self.run_command(command)
-    
-    def _get_prompt(self) -> str:
-        """Get the current prompt string."""
-        path = self._current_path or os.getcwd()
-        # Shorten path if too long
-        if len(path) > 50:
-            parts = path.split(os.sep)
-            if len(parts) > 3:
-                path = os.sep.join(['...'] + parts[-2:])
-        return path
-    
-    def _is_git_command(self, command: str) -> bool:
-        """Check if command is a git command."""
-        return command.strip().startswith('git ')
-    
-    def _format_with_colors(self, text: str, base_color: str, apply_git_colors: bool = False):
-        """
-        Format text with syntax highlighting.
-        
-        Args:
-            text: Text to format
-            base_color: Base color for text
-            apply_git_colors: Whether to apply git-specific coloring
-        """
-        cursor = self._output.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        
-        if not apply_git_colors:
-            # Simple colored text
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(base_color))
-            cursor.insertText(text, fmt)
-        else:
-            # Apply git patterns
-            self._apply_git_highlighting(cursor, text, base_color)
-        
-        self._output.setTextCursor(cursor)
-        self._output.ensureCursorVisible()
-    
-    def _apply_git_highlighting(self, cursor: QTextCursor, text: str, base_color: str):
-        """Apply git-specific syntax highlighting to text."""
-        lines = text.split('\n')
-        
-        for i, line in enumerate(lines):
-            if i > 0:
-                cursor.insertText('\n')
-            
-            if not line:
-                continue
-            
-            # Determine line color based on patterns
-            line_color = base_color
-            
-            # Check for diff additions/deletions
-            if line.startswith('+') and not line.startswith('+++'):
-                line_color = TerminalColors.GIT_ADD
-            elif line.startswith('-') and not line.startswith('---'):
-                line_color = TerminalColors.GIT_DELETE
-            elif line.startswith('@@'):
-                line_color = TerminalColors.GIT_BRANCH
-            elif line.startswith('commit '):
-                line_color = TerminalColors.GIT_COMMIT
-            elif line.startswith('Author:'):
-                line_color = TerminalColors.GIT_AUTHOR
-            elif line.startswith('Date:'):
-                line_color = TerminalColors.GIT_DATE
-            elif line.startswith('diff --git'):
-                line_color = TerminalColors.FILE_HEADER
-            elif line.startswith('index '):
-                line_color = TerminalColors.LINE_NUMBER
-            elif 'modified:' in line:
-                line_color = TerminalColors.GIT_MODIFIED
-            elif 'new file:' in line:
-                line_color = TerminalColors.GIT_ADD
-            elif 'deleted:' in line:
-                line_color = TerminalColors.GIT_DELETE
-            elif line.startswith('* '):
-                line_color = TerminalColors.GIT_BRANCH
-            elif line.strip().startswith('M ') or line.strip().startswith('A ') or line.strip().startswith('D '):
-                # git status short format
-                status = line.strip()[0]
-                if status == 'M':
-                    line_color = TerminalColors.GIT_MODIFIED
-                elif status == 'A':
-                    line_color = TerminalColors.GIT_ADD
-                elif status == 'D':
-                    line_color = TerminalColors.GIT_DELETE
-            elif line.strip().startswith('??'):
-                line_color = TerminalColors.GIT_UNTRACKED
-            
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(line_color))
-            cursor.insertText(line, fmt)
-    
     def _write_prompt(self):
         """Write the prompt to output."""
         cursor = self._output.textCursor()
@@ -656,28 +600,28 @@ class Terminal(QDockWidget):
     
     def add_log(self, log_type: str, message: str):
         """
-        Add a log entry to the terminal output.
+        Add a log entry to the terminal.
         
         Args:
-            log_type: One of "stdout", "stderr", "error", "success", "command", "info", "debug", "warning"
-            message: The message to display
+            log_type: Type of log (stdout, stderr, error, warning, info, command, success)
+            message: Log message text
         """
-        if not message:
-            return
-        
-        is_git = self._is_git_command(self._last_command)
+        is_git = self._is_git_command()
         
         log_entry = {
             'type': log_type,
             'message': message,
-            'is_git': is_git
+            'is_git': is_git,
+            'timestamp': datetime.now().isoformat()
         }
-        self._log_buffer.append(log_entry)
         
-        # Only display if it passes the filter
+        self._log_buffer.append(log_entry)
+        if len(self._log_buffer) > self._max_log_buffer_size:
+            self._log_buffer.pop(0)  # Remove oldest entry
+        
         if self._should_show_log(log_entry):
             self._display_log_entry(log_entry)
-    
+
     def append_output(self, text: str):
         """Append text to terminal output."""
         self.add_log("info", text)
@@ -809,7 +753,7 @@ Shortcuts:
         self.show()
         self.raise_()
     
-    def _open_color_config(self):
+    def _show_color_config(self):
         """Open color configuration dialog."""
         dialog = TerminalColorConfig(self)
         dialog.colors_changed.connect(self._apply_custom_colors)
@@ -850,15 +794,269 @@ Shortcuts:
     def _on_serial_data_received(self, data: bytes):
         """Handle data received from serial port."""
         try:
-            text = data.decode('utf-8', errors='replace')
-            self.add_log("info", text.rstrip())
+            self._serial_buffer.extend(data)
+            
+            # Process complete lines
+            while b'\n' in self._serial_buffer:
+                line, self._serial_buffer = self._serial_buffer.split(b'\n', 1)
+                text = line.decode('utf-8', errors='replace').rstrip()
+                
+                if text:
+                    if self._serial_hex_mode:
+                        hex_str = ' '.join(f'{b:02X}' for b in line)
+                        self.add_log("info", f"RX (HEX): {hex_str}")
+                        self.add_log("info", f"RX (ASCII): {text}")
+                    else:
+                        self.add_log("info", f"RX: {text}")
         except Exception as e:
-            self.add_log("error", f"Error decoding data: {str(e)}")
+            self.add_log("error", f"Error decoding serial data: {str(e)}")
+            self._serial_buffer.clear()
     
     def _on_serial_error(self, error_message: str):
-        """Handle serial port error."""
-        self.add_log("error", error_message)
+        """Handle serial port errors."""
+        self.add_log("error", f"Serial error: {error_message}")
+        
+        if "disconnected" in error_message.lower() or "lost" in error_message.lower():
+            if self._auto_reconnect_enabled and not self._serial_manager.is_connected():
+                self.add_log("warning", "Attempting auto-reconnect in 2 seconds...")
+                QTimer.singleShot(2000, self._attempt_reconnect)
+
+    def _on_filter_changed(self, filter_data: dict):
+        """Handle filter changes from TerminalLogFilter widget."""
+        self._active_filter = filter_data
+        self._apply_filter()
     
+    def _on_search_requested(self, text: str, case_sensitive: bool, use_regex: bool):
+        """Handle search request from TerminalLogFilter widget."""
+        if not self._search_helper:
+            return
+        
+        total = self._search_helper.search(text, case_sensitive, use_regex)
+        current = self._search_helper.get_current_match()
+        self._filter_widget.update_match_count(current, total)
+
+    def _should_show_log(self, log_entry: dict) -> bool:
+        """
+        Check if a log entry should be displayed based on current filters.
+        
+        Args:
+            log_entry: The log entry to check
+            
+        Returns:
+            True if the log should be displayed, False otherwise
+        """
+        # Check log type filter
+        log_types = self._active_filter.get('log_types', {'all'})
+        if 'all' not in log_types:
+            log_type = log_entry['type']
+            if log_type not in log_types:
+                return False
+        
+        # Check custom pattern filter
+        custom_pattern = self._active_filter.get('custom_pattern', '')
+        if custom_pattern:
+            message = log_entry['message']
+            try:
+                if not re.search(custom_pattern, message, re.IGNORECASE):
+                    return False
+            except re.error:
+                # Invalid regex, treat as literal text
+                if custom_pattern.lower() not in message.lower():
+                    return False
+        
+        return True
+
+    def _apply_filter(self):
+        """Apply current filter to log buffer and refresh display."""
+        self._output.clear()
+        
+        for log_entry in self._log_buffer:
+            if self._should_show_log(log_entry):
+                self._display_log_entry(log_entry)
+    
+    def _clear_filter(self):
+        """Clear the current filter."""
+        self._active_filter = {'log_types': {'all'}, 'custom_pattern': ''}
+        self._apply_filter()
+    
+    def _display_log_entry(self, log_entry: dict):
+        """Display a single log entry in the output."""
+        log_type = log_entry['type']
+        message = log_entry['message']
+        is_git = log_entry.get('is_git', False)
+        
+        cursor = self._output.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        
+        if is_git:
+            self._format_git_output(cursor, message)
+        else:
+            color = self._get_log_color(log_type)
+            cursor.insertHtml(f'<span style="color: {color};">{self._escape_html(message)}</span><br>')
+        
+        if self._auto_scroll:
+            self._output.ensureCursorVisible()
+
+    def _is_git_command(self) -> bool:
+        """Check if the last command was a git command."""
+        return self._last_command.strip().startswith('git ')
+    
+    def _format_with_colors(self, text: str, base_color: str, apply_git_colors: bool = False):
+        """
+        Format text with syntax highlighting.
+        
+        Args:
+            text: Text to format
+            base_color: Base color for text
+            apply_git_colors: Whether to apply git-specific coloring
+        """
+        cursor = self._output.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        
+        if not apply_git_colors:
+            # Simple colored text
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(base_color))
+            cursor.insertText(text, fmt)
+        else:
+            # Apply git patterns
+            self._apply_git_highlighting(cursor, text, base_color)
+        
+        self._output.setTextCursor(cursor)
+        self._output.ensureCursorVisible()
+    
+    def _apply_git_highlighting(self, cursor: QTextCursor, text: str, base_color: str):
+        """Apply git-specific syntax highlighting to text."""
+        lines = text.split('\n')
+        
+        for i, line in enumerate(lines):
+            if i > 0:
+                cursor.insertText('\n')
+            
+            if not line:
+                continue
+            
+            # Determine line color based on patterns
+            line_color = base_color
+            
+            # Check for diff additions/deletions
+            if line.startswith('+') and not line.startswith('+++'):
+                line_color = TerminalColors.GIT_ADD
+            elif line.startswith('-') and not line.startswith('---'):
+                line_color = TerminalColors.GIT_DELETE
+            elif line.startswith('@@'):
+                line_color = TerminalColors.GIT_BRANCH
+            elif line.startswith('commit '):
+                line_color = TerminalColors.GIT_COMMIT
+            elif line.startswith('Author:'):
+                line_color = TerminalColors.GIT_AUTHOR
+            elif line.startswith('Date:'):
+                line_color = TerminalColors.GIT_DATE
+            elif line.startswith('diff --git'):
+                line_color = TerminalColors.FILE_HEADER
+            elif line.startswith('index '):
+                line_color = TerminalColors.LINE_NUMBER
+            elif 'modified:' in line:
+                line_color = TerminalColors.GIT_MODIFIED
+            elif 'new file:' in line:
+                line_color = TerminalColors.GIT_ADD
+            elif 'deleted:' in line:
+                line_color = TerminalColors.GIT_DELETE
+            elif line.startswith('* '):
+                line_color = TerminalColors.GIT_BRANCH
+            elif line.strip().startswith('M ') or line.strip().startswith('A ') or line.strip().startswith('D '):
+                # git status short format
+                status = line.strip()[0]
+                if status == 'M':
+                    line_color = TerminalColors.GIT_MODIFIED
+                elif status == 'A':
+                    line_color = TerminalColors.GIT_ADD
+                elif status == 'D':
+                    line_color = TerminalColors.GIT_DELETE
+            elif line.strip().startswith('??'):
+                line_color = TerminalColors.GIT_UNTRACKED
+            
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(line_color))
+            cursor.insertText(line, fmt)
+    
+    def _get_prompt(self) -> str:
+        """Get the current prompt string."""
+        path = self._current_path or os.getcwd()
+        # Shorten path if too long
+        if len(path) > 50:
+            parts = path.split(os.sep)
+            if len(parts) > 3:
+                path = os.sep.join(['...'] + parts[-2:])
+        return path
+    
+    def _execute_input(self):
+        """Execute command from input field."""
+        command = self._input.text().strip()
+        if not command:
+            return
+        
+        self._input.clear()
+        
+        if not self._command_history or self._command_history[0] != command:
+            self._command_history.insert(0, command)
+        self._history_index = -1
+        
+        if self._serial_mode and self._serial_manager.is_connected():
+            # Send data via serial port
+            if self._serial_manager.send_text(command):
+                self.add_log("command", f"TX: {command}")
+            else:
+                self.add_log("error", "Failed to send data")
+            return
+
+        # Handle built-in commands
+        if self._handle_builtin(command):
+            return
+        
+        self.run_command(command)
+    
+    def _attempt_reconnect(self):
+        """Attempt to reconnect to serial port."""
+        if not self._serial_manager.is_connected():
+            self.add_log("info", "Attempting to reconnect...")
+            try:
+                self._toggle_serial_connection()
+            except Exception as e:
+                self.add_log("error", f"Reconnection failed: {str(e)}")
+    
+    def export_logs(self, filepath: str):
+        """
+        Export current logs to file.
+        
+        Args:
+            filepath: Path to export file
+        """
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                for entry in self._log_buffer:
+                    timestamp = entry.get('timestamp', '')
+                    log_type = entry['type']
+                    message = entry['message']
+                    f.write(f"[{timestamp}] [{log_type.upper()}] {message}\n")
+            self.add_log("success", f"Logs exported to {filepath}")
+        except Exception as e:
+            self.add_log("error", f"Failed to export logs: {str(e)}")
+    
+    def set_auto_scroll(self, enabled: bool):
+        """Enable or disable auto-scrolling."""
+        self._auto_scroll = enabled
+        self._auto_scroll_btn.setChecked(enabled)
+        self._auto_scroll_btn.setText(f"Auto Scroll: {'ON' if enabled else 'OFF'}")
+    
+    def set_hex_view_mode(self, enabled: bool):
+        """Enable or disable hex view mode for serial data."""
+        self._serial_hex_mode = enabled
+    
+    def set_auto_reconnect(self, enabled: bool):
+        """Enable or disable auto-reconnect for serial port."""
+        self._auto_reconnect_enabled = enabled
+
     def _append_output(self, text: str, color: str):
         """Append text to terminal output with specified color."""
         cursor = self._output.textCursor()
@@ -883,83 +1081,45 @@ Shortcuts:
         dialog.colors_changed.connect(self._apply_custom_colors)
         dialog.exec()
     
-    def _apply_filter(self):
-        """Apply current filter to log buffer and refresh display."""
-        self._output.clear()
+    def _apply_custom_colors(self, colors: dict):
+        """Apply custom colors to terminal."""
+        # Reload color class
+        TerminalColors.reload_colors()
         
-        for log_entry in self._log_buffer:
-            if self._should_show_log(log_entry):
-                self._display_log_entry(log_entry)
-    
-    def _clear_filter(self):
-        """Clear the current filter."""
-        self._active_filter = {'log_types': {'all'}, 'custom_pattern': ''}
+        # Update output stylesheet
+        self._output.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {TerminalColors.BACKGROUND};
+                color: {TerminalColors.TEXT};
+                border: none;
+                selection-background-color: #264F78;
+                selection-color: #FFFFFF;
+            }}
+            QScrollBar:vertical {{
+                background-color: #2D2D2D;
+                width: 12px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: #5A5A5A;
+                min-height: 20px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: #787878;
+            }}
+        """)
+        
+        # Re-render all logs with new colors
         self._apply_filter()
-    
-    def _display_log_entry(self, log_entry: dict):
-        """Display a single log entry."""
-        log_type = log_entry['type']
-        message = log_entry['message']
-        is_git = log_entry.get('is_git', False)
-        
-        color_map = {
-            "stdout": TerminalColors.INFO,
-            "stderr": TerminalColors.ERROR,
-            "error": TerminalColors.ERROR,
-            "success": TerminalColors.SUCCESS,
-            "command": TerminalColors.COMMAND,
-            "info": TerminalColors.INFO,
-            "debug": TerminalColors.DEBUG,
-            "warning": TerminalColors.WARNING,
-        }
-        
-        base_color = color_map.get(log_type, TerminalColors.INFO)
-        
-        if log_type in ("command", "Command"):
-            self._write_prompt()
-            self._format_with_colors(message + "\n", base_color, apply_git_colors=False)
+
+    def _toggle_auto_scroll(self):
+        """Toggle auto-scrolling on/off."""
+        self._auto_scroll = self._auto_scroll_btn.isChecked()
+        if self._auto_scroll:
+            self._auto_scroll_btn.setText("Auto Scroll: ON")
+            # Scroll to bottom immediately
+            scrollbar = self._output.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
         else:
-            self._format_with_colors(message + "\n", base_color, apply_git_colors=is_git)
-    
-    def _should_show_log(self, log_entry: dict) -> bool:
-        """
-        Check if a log entry should be displayed based on current filters.
-        
-        Args:
-            log_entry: The log entry to check
-            
-        Returns:
-            True if the log should be displayed, False otherwise
-        """
-        # Check log type filter
-        log_types = self._active_filter.get('log_types', {'all'})
-        if 'all' not in log_types:
-            log_type = log_entry['type']
-            # Map log types to filter categories
-            type_mapping = {
-                'error': 'errors',
-                'stderr': 'errors',
-                'warning': 'warnings',
-                'info': 'info',
-                'stdout': 'info',
-                'success': 'info',
-                'command': 'commands',
-                'debug': 'info'
-            }
-            filter_type = type_mapping.get(log_type, 'info')
-            if filter_type not in log_types:
-                return False
-        
-        # Check custom pattern filter
-        custom_pattern = self._active_filter.get('custom_pattern', '')
-        if custom_pattern:
-            message = log_entry['message']
-            try:
-                if not re.search(custom_pattern, message, re.IGNORECASE):
-                    return False
-            except re.error:
-                # Invalid regex, treat as literal text
-                if custom_pattern.lower() not in message.lower():
-                    return False
-        
-        return True
+            self._auto_scroll_btn.setText("Auto Scroll: OFF")
