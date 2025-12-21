@@ -19,7 +19,8 @@ from taara_ide.ui.activity_bar import ActivityBar
 from taara_ide.ui.breadcrumb_bar import BreadcrumbBar
 from taara_ide.ui.dialogs import (
     FindDialog, GoToLineDialog, ProjectConfigDialog,
-    CtagsPathDialog, CreateProjectDialog, InstallFrameworkDialog
+    CtagsPathDialog, CreateProjectDialog, InstallFrameworkDialog,
+    CProjectConfigDialog  # Import C project config dialog
 )
 from taara_ide.ui.editor.editor_manager import EditorManager
 from taara_ide.ui.panels.project_view import ProjectView
@@ -34,7 +35,7 @@ from taara_ide.ui.panels.debug_sidebar import DebugSidebarPanel
 from taara_ide.config import SettingsManager, AppConstants
 from taara_ide.services import ProjectService, BuildService, DebugService
 from taara_ide.utils import resource_path
-
+from taara_ide.core.compiler.c_project_config import CProjectConfig, CProjectConfigManager  # Import C project config classes
 
 class MainWindow(QMainWindow):
     """
@@ -199,9 +200,6 @@ class MainWindow(QMainWindow):
             }
             QTabBar::tab:hover {
                 background: #cfd6b2;
-            }
-            QTabBar::tab:!selected {
-                margin-top: 3px;
             }
             QTabBar::tab:selected:!active {
                 background: #2a2a2a;
@@ -432,6 +430,7 @@ class MainWindow(QMainWindow):
         self._actions.connect_many({
             "settings.ctags_path": self._show_ctags_dialog,
             "settings.project_config": self._show_project_config,
+            "settings.c_project_config": self._show_c_project_config,  # Add C project config action
         })
         
         # Help actions
@@ -557,13 +556,128 @@ class MainWindow(QMainWindow):
     
     def _compile(self) -> None:
         """Compile project"""
-        self._build_service.build()
+        if self._terminal:
+            if not self._terminal.isVisible():
+                self._terminal.setVisible(True)
+                self._actions.set_checked("view.terminal", True)
+            self._terminal.set_terminal_mode()
+        
+        if not self._project_service.is_open:
+            # Try to find .cproject in current directory
+            current_dir = None
+            if self._project_view:
+                current_dir = self._project_view.get_project_directory()
+            
+            if current_dir:
+                cproject_path = os.path.join(current_dir, ".cproject")
+                if os.path.exists(cproject_path):
+                    # Build C project using .cproject
+                    self._compile_c_project(current_dir)
+                    return
+            
+            # No .cproject found, try to compile current file
+            editor = self._editor_manager.get_current_editor()
+            if editor and editor.file_path:
+                self._compile_single_file(editor.file_path)
+            else:
+                self._status_manager.set_message("No project or file to compile", 3000)
+        else:
+            self._build_service.build()
+
+    def _compile_c_project(self, project_path: str) -> None:
+        """Compile C project using .cproject configuration"""
+        from taara_ide.core.compiler import NativeCCompiler
+        from taara_ide.core.compiler.c_project_config import CProjectConfigManager
+        
+        # Load .cproject
+        c_config = CProjectConfigManager.load(project_path)
+        if not c_config:
+            self._status_manager.set_message("Failed to load .cproject", 3000)
+            return
+        
+        # Create compiler and connect signals
+        compiler = NativeCCompiler(self)
+        compiler.compile_output.connect(self._on_build_output)
+        compiler.compile_finished.connect(lambda success, errors:
+            self._status_manager.set_message(
+                "Build successful" if success else "Build failed",
+                3000
+            )
+        )
+        
+        # Start compilation
+        self._status_manager.set_message("Building C project...", 0)
+        compiler.compile_project(project_path, c_config)
+
+    
+    def _compile_single_file(self, file_path: str) -> None:
+        """Compile a single file without a project"""
+        from taara_ide.core.compiler import LanguageDetector, Language
+        
+        lang = LanguageDetector.detect(file_path)
+        
+        if lang == Language.PYTHON:
+            # Execute Python file
+            from taara_ide.core.compiler import PythonExecutor
+            executor = PythonExecutor(self)
+            executor.compile_output.connect(self._on_build_output)
+            executor.compile_finished.connect(lambda success, errors: 
+                self._status_manager.set_message(
+                    "Execution finished" if success else "Execution failed", 
+                    3000
+                )
+            )
+            executor.compile([file_path], "", {})
+            
+        elif lang in (Language.C, Language.CPP):
+            # Compile native C/C++
+            from taara_ide.core.compiler import NativeCCompiler
+            compiler = NativeCCompiler(self)
+            compiler.compile_output.connect(self._on_build_output)
+            compiler.compile_finished.connect(lambda success, errors:
+                self._status_manager.set_message(
+                    "Compilation successful" if success else "Compilation failed",
+                    3000
+                )
+            )
+            
+            build_dir = os.path.join(os.path.dirname(file_path), "build")
+            output_name = os.path.splitext(os.path.basename(file_path))[0]
+            
+            import platform
+            if platform.system() == "Windows":
+                output_path = os.path.join(build_dir, f"{output_name}.exe")
+            else:
+                output_path = os.path.join(build_dir, output_name)
+            
+            options = {
+                "build_dir": build_dir,
+                "optimization": "-O2",
+                "debug_info": True,
+                "defines": [],
+                "include_paths": [],
+                "compiler_flags": [],
+                "linker_flags": []
+            }
+            
+            compiler.compile([file_path], output_path, options)
+        else:
+            self._status_manager.set_message(
+                f"Cannot compile {lang.value} files", 
+                3000
+            )
     
     def _compile_and_run(self) -> None:
         """Compile and run/flash"""
+        if self._terminal:
+            if not self._terminal.isVisible():
+                self._terminal.setVisible(True)
+                self._actions.set_checked("view.terminal", True)
+            self._terminal.set_terminal_mode()
+        
         self._build_service.build()
         # TODO: Flash after build
-    
+
     def _flash(self) -> None:
         """Flash to target"""
         # TODO: Implement flash
@@ -648,6 +762,61 @@ class MainWindow(QMainWindow):
         
         dialog = ProjectConfigDialog(self._project_service, self)
         dialog.exec()
+    
+    def _show_c_project_config(self) -> None:
+        """Show C project configuration dialog"""
+        project_path = None
+        project_name = "Untitled"
+        
+        # Try to get path from project service first
+        if self._project_service.is_open:
+            project_path = self._project_service.path
+            project_name = self._project_service.name
+        # Fall back to project view's current directory
+        elif self._project_view and self._project_view.get_project_directory():
+            project_path = self._project_view.get_project_directory()
+            project_name = os.path.basename(project_path)
+        
+        if not project_path:
+            QMessageBox.warning(
+                self, 
+                "No Directory", 
+                "Please open a folder in Project View first.\n\n"
+                "Use File > Open Folder to browse to your C project directory."
+            )
+            return
+        
+        # Load or create .cproject config
+        c_config = CProjectConfigManager.load(project_path)
+        if c_config is None:
+            # Create default config
+            c_config = CProjectConfigManager.create_default(project_path, project_name)
+            
+            # Show info message for first-time setup
+            QMessageBox.information(
+                self,
+                "New C Project Configuration",
+                f"Creating new .cproject configuration for:\n{project_path}\n\n"
+                "Configure your source files, include paths, and build settings."
+            )
+        
+        # Show dialog
+        dialog = CProjectConfigDialog(c_config, project_path, self)
+        if dialog.exec():
+            # Save configuration
+            if CProjectConfigManager.save(project_path, c_config):
+                self._status_manager.set_message("C project configuration saved", 3000)
+                QMessageBox.information(
+                    self,
+                    "Configuration Saved",
+                    f"C project configuration has been saved to:\n{os.path.join(project_path, '.cproject')}"
+                )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Save Failed",
+                    "Failed to save C project configuration."
+                )
     
     def _show_install_framework(self) -> None:
         """Show framework installation dialog"""

@@ -23,6 +23,7 @@ class ProjectConfig:
     target_mcu: str = ""
     framework: str = ""
     toolchain: str = "arm-none-eabi"
+    project_type: str = "embedded"  # Added project_type: "embedded", "native", "python"
     
     # Build settings
     optimization: str = "Debug"
@@ -37,6 +38,8 @@ class ProjectConfig:
     # Framework specific
     framework_version: str = ""
     hal_modules: List[str] = field(default_factory=list)
+    
+    python_args: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -94,7 +97,8 @@ class ProjectService(QObject):
         name: str,
         target_mcu: str = "",
         framework: str = "",
-        template: Optional[str] = None
+        template: Optional[str] = None,
+        project_type: str = "embedded"  # Added project_type parameter
     ) -> Result:
         """
         Create a new project.
@@ -105,6 +109,7 @@ class ProjectService(QObject):
             target_mcu: Target MCU (e.g., "STM32F407VG")
             framework: Framework name (e.g., "stm32-taara")
             template: Optional template name to use
+            project_type: Type of the project ("embedded", "native", "python")
         """
         # Create project directory
         result = FileUtils.ensure_dir(path)
@@ -122,7 +127,8 @@ class ProjectService(QObject):
             target_mcu=target_mcu,
             framework=framework,
             source_paths=['src'],
-            include_paths=['inc']
+            include_paths=['inc'],
+            project_type=project_type  # Set project_type
         )
         
         # Save config

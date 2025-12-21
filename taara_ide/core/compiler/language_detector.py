@@ -12,6 +12,7 @@ class Language(Enum):
     CPP = "cpp"
     ASSEMBLY = "asm"
     HEADER = "header"
+    PYTHON = "python"  # Added Python language support
     UNKNOWN = "unknown"
 
 
@@ -34,6 +35,9 @@ class LanguageDetector:
         '.s': Language.ASSEMBLY,
         '.S': Language.ASSEMBLY,
         '.asm': Language.ASSEMBLY,
+        # Python
+        '.py': Language.PYTHON,
+        '.pyw': Language.PYTHON,
     }
     
     @classmethod
@@ -71,5 +75,6 @@ class LanguageDetector:
             Language.C: "-x c",
             Language.CPP: "-x c++",
             Language.ASSEMBLY: "-x assembler-with-cpp",
+            Language.PYTHON: "-x python",  # Added Python compiler flag
         }
         return flags.get(language)

@@ -7,6 +7,7 @@ from .project_config_dialog import ProjectConfigDialog
 from .ctags_path_dialog import CtagsPathDialog
 from .create_project_dialog import CreateProjectDialog
 from .install_framework_dialog import InstallFrameworkDialog
+from .c_project_config_dialog import CProjectConfigDialog
 
 __all__ = [
     'FindDialog',
@@ -14,5 +15,6 @@ __all__ = [
     'ProjectConfigDialog',
     'CtagsPathDialog',
     'CreateProjectDialog',
-    'InstallFrameworkDialog'
+    'InstallFrameworkDialog',
+    'CProjectConfigDialog'
 ]

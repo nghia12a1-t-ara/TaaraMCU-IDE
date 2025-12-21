@@ -7,7 +7,9 @@ from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, pyqtSignal as Signal
 
-from taara_ide.core.compiler import GCCCompiler
+from taara_ide.core.compiler import GCCCompiler, NativeCCompiler, PythonExecutor
+from taara_ide.core.compiler import LanguageDetector, Language
+from taara_ide.core.compiler.c_project_config import CProjectConfig, CProjectConfigManager
 from taara_ide.core.base import BuildStatus, CompileError
 from taara_ide.config import SettingsManager
 from taara_ide.services.project_service import ProjectService, ProjectConfig
@@ -51,23 +53,78 @@ class BuildService(QObject):
         super().__init__(parent)
         self._project = project_service
         self._settings = SettingsManager()
-        self._compiler = GCCCompiler(self)
         
-        # Connect compiler signals
-        self._compiler.compile_started.connect(self.build_started.emit)
-        self._compiler.compile_progress.connect(self.build_progress.emit)
-        self._compiler.compile_output.connect(self.build_output.emit)
-        self._compiler.compile_finished.connect(self._on_compile_finished)
+        self._gcc_compiler = GCCCompiler(self)
+        self._native_compiler = NativeCCompiler(self)
+        self._python_executor = PythonExecutor(self)
+        self._current_compiler = None
         
         self._start_time: int = 0
+        
+    def _select_compiler(self) -> Optional[Any]:
+        """Select appropriate compiler based on project type and files"""
+        if not self._project.is_open:
+            return None
+        
+        project_config = self._project.config
+        
+        # Check project type
+        if project_config.project_type == "python":
+            return self._python_executor
+        elif project_config.project_type == "native":
+            return self._native_compiler
+        elif project_config.project_type == "embedded":
+            return self._gcc_compiler
+        
+        # Auto-detect from files
+        source_files = self._project.get_source_files()
+        if source_files:
+            first_file = source_files[0]
+            lang = LanguageDetector.detect(first_file)
+            
+            if lang == Language.PYTHON:
+                return self._python_executor
+            elif lang in (Language.C, Language.CPP):
+                # Check if it's embedded (has ARM-specific code or MCU set)
+                if project_config.target_mcu:
+                    return self._gcc_compiler
+                else:
+                    return self._native_compiler
+        
+        # Default to GCC for embedded
+        return self._gcc_compiler
+    
+    def _connect_compiler_signals(self, compiler):
+        """Connect compiler signals"""
+        # Disconnect previous compiler if any
+        if self._current_compiler:
+            try:
+                self._current_compiler.compile_started.disconnect()
+                self._current_compiler.compile_progress.disconnect()
+                self._current_compiler.compile_output.disconnect()
+                self._current_compiler.compile_finished.disconnect()
+            except:
+                pass
+        
+        # Connect new compiler
+        compiler.compile_started.connect(self.build_started.emit)
+        compiler.compile_progress.connect(self.build_progress.emit)
+        compiler.compile_output.connect(self.build_output.emit)
+        compiler.compile_finished.connect(self._on_compile_finished)
+        
+        self._current_compiler = compiler
     
     @property
     def status(self) -> BuildStatus:
-        return self._compiler.status
+        if self._current_compiler:
+            return self._current_compiler.status
+        return BuildStatus.IDLE
     
     @property
     def is_building(self) -> bool:
-        return self._compiler.status == BuildStatus.COMPILING
+        if self._current_compiler:
+            return self._current_compiler.status == BuildStatus.COMPILING
+        return False
     
     def build(self, config_override: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -83,6 +140,13 @@ class BuildService(QObject):
             self.build_output.emit("Error: No project open")
             return False
         
+        compiler = self._select_compiler()
+        if not compiler:
+            self.build_output.emit("Error: No suitable compiler found")
+            return False
+        
+        self._connect_compiler_signals(compiler)
+        
         if self.is_building:
             self.build_output.emit("Error: Build already in progress")
             return False
@@ -93,6 +157,62 @@ class BuildService(QObject):
         project_config = self._project.config
         project_path = self._project.path
         
+        if compiler == self._python_executor:
+            return self._build_python(project_config, project_path, config_override)
+        
+        # C/C++ compilation - check for .cproject first
+        c_config = CProjectConfigManager.load(project_path)
+        if c_config and compiler == self._native_compiler:
+            return self._build_c_project(c_config, project_path, config_override)
+        
+        # Fall back to standard build
+        return self._build_c_cpp(compiler, project_config, project_path, config_override)
+    
+    def _build_c_project(self, c_config: CProjectConfig, project_path: str, config_override) -> bool:
+        """Build C/C++ project using .cproject configuration"""
+        self.build_output.emit("=" * 60)
+        self.build_output.emit(f"Building C Project: {c_config.project_name}")
+        self.build_output.emit("=" * 60)
+        
+        # Apply config overrides
+        if config_override:
+            if "optimization_level" in config_override:
+                c_config.optimization_level = config_override["optimization_level"]
+            if "active_config" in config_override:
+                c_config.active_config = config_override["active_config"]
+        
+        return self._native_compiler.compile_project(project_path, c_config)
+    
+    def _build_python(self, project_config, project_path, config_override) -> bool:
+        """Execute Python script"""
+        source_files = self._project.get_source_files()
+        if not source_files:
+            self.build_output.emit("Error: No Python files found")
+            return False
+        
+        # Use first .py file or main.py if exists
+        main_file = None
+        for f in source_files:
+            if f.endswith('main.py'):
+                main_file = f
+                break
+        
+        if not main_file:
+            main_file = source_files[0]
+        
+        self.build_output.emit(f"Executing {os.path.basename(main_file)}...")
+        
+        options = {
+            "args": project_config.python_args if hasattr(project_config, 'python_args') else []
+        }
+        
+        if config_override:
+            options.update(config_override)
+        
+        return self._current_compiler.compile([main_file], "", options)
+    
+    def _build_c_cpp(self, compiler, project_config, project_path, config_override) -> bool:
+        """Build C/C++ project"""
         # Collect source files
         source_files = self._project.get_source_files()
         if not source_files:
@@ -102,7 +222,18 @@ class BuildService(QObject):
         # Build output path
         build_dir = os.path.join(project_path, "build")
         output_name = project_config.name.replace(" ", "_").lower()
-        output_path = os.path.join(build_dir, f"{output_name}.elf")
+        
+        # Different extension for different platforms
+        if compiler == self._native_compiler:
+            import platform
+            if platform.system() == "Windows":
+                output_ext = ".exe"
+            else:
+                output_ext = ""
+        else:
+            output_ext = ".elf"
+        
+        output_path = os.path.join(build_dir, f"{output_name}{output_ext}")
         
         # Prepare compiler options
         options = {
@@ -113,23 +244,27 @@ class BuildService(QObject):
             "include_paths": self._project.get_include_paths(),
             "compiler_flags": project_config.compiler_flags.copy(),
             "linker_flags": project_config.linker_flags.copy(),
-            "target_mcu": self._get_mcu_core(project_config.target_mcu),
         }
         
-        # Add linker script if specified
-        if project_config.linker_script:
-            ld_path = os.path.join(project_path, project_config.linker_script)
-            if os.path.exists(ld_path):
-                options["linker_script"] = ld_path
+        # Add embedded-specific options
+        if compiler == self._gcc_compiler:
+            options["target_mcu"] = self._get_mcu_core(project_config.target_mcu)
+            
+            # Add linker script if specified
+            if project_config.linker_script:
+                ld_path = os.path.join(project_path, project_config.linker_script)
+                if os.path.exists(ld_path):
+                    options["linker_script"] = ld_path
         
         # Apply overrides
         if config_override:
             options.update(config_override)
         
         self.build_output.emit(f"Building {project_config.name}...")
+        self.build_output.emit(f"Compiler: {compiler.get_toolchain_info().name if compiler.get_toolchain_info() else 'Unknown'}")
         self.build_output.emit(f"Source files: {len(source_files)}")
         
-        return self._compiler.compile(source_files, output_path, options)
+        return compiler.compile(source_files, output_path, options)
     
     def clean(self) -> bool:
         """Clean build artifacts"""
@@ -137,7 +272,7 @@ class BuildService(QObject):
             return False
         
         build_dir = os.path.join(self._project.path, "build")
-        success = self._compiler.clean(build_dir)
+        success = self._current_compiler.clean(build_dir) if self._current_compiler else False
         
         if success:
             self.build_output.emit("Clean completed")
@@ -153,7 +288,8 @@ class BuildService(QObject):
     
     def cancel(self) -> None:
         """Cancel current build"""
-        self._compiler.cancel()
+        if self._current_compiler:
+            self._current_compiler.cancel()
     
     def _on_compile_finished(self, success: bool, errors: list):
         import time

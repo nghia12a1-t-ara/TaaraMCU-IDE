@@ -22,6 +22,7 @@ from taara_ide.utils.process_utils import get_subprocess_flags
 from taara_ide.ui.panels.serial_port_manager import SerialPortManager
 from taara_ide.ui.panels.terminal_log_filter import TerminalLogFilter, TerminalSearchHelper
 from taara_ide.ui.panels.terminal_color_config import TerminalColorConfig
+from PyQt6.QtCore import QProcess
 
 if TYPE_CHECKING:
     from taara_ide.ui.main_window import MainWindow
@@ -58,6 +59,14 @@ class TerminalColors:
     GIT_HEAD = "#569CD6"         # Blue for HEAD
     GIT_AUTHOR = "#9CDCFE"       # Light blue for author
     GIT_DATE = "#808080"         # Gray for dates
+    
+    # Compile colors
+    COMPILE_COMMAND = "#569CD6"  # Blue for compile commands (gcc, g++, python)
+    COMPILE_FILE = "#CE9178"     # Orange for file paths
+    COMPILE_FLAG = "#DCDCAA"     # Yellow for compiler flags (-O2, -Wall, etc)
+    COMPILE_SUCCESS = "#4EC9B0"  # Cyan for success messages
+    COMPILE_ERROR = "#F44747"    # Red for errors
+    COMPILE_WARNING = "#FFCC00"  # Yellow for warnings
     
     # File colors
     FILE_HEADER = "#569CD6"      # Blue for file headers (diff)
@@ -131,14 +140,15 @@ class Terminal(QDockWidget):
     """
     
     def __init__(self, parent: Optional['MainWindow'] = None):
-        super().__init__("Terminal", parent)
+        super().__init__(parent)
         self._parent = parent
+        self.setWindowTitle("Terminal")
         
-        self._command_history: List[str] = []
-        self._history_index: int = -1
-        self._workers: List[TerminalWorker] = []
-        self._command_queue: queue.Queue = queue.Queue()
-        self._command_active: bool = False
+        # Initialize command history
+        self._command_history = []
+        self._history_index = -1
+        
+        self._process: Optional[QProcess] = None
         self._current_path: Optional[str] = None
         self._last_command: str = ""
         
@@ -158,11 +168,30 @@ class Terminal(QDockWidget):
         
         self._auto_reconnect_enabled = False
         
+        # Terminal state - initialize to current working directory
+        self._current_path = os.getcwd()
+        if parent and hasattr(parent, 'project_view') and parent.project_view:
+            project_dir = parent.project_view.get_project_directory()
+            if project_dir and os.path.isdir(project_dir):
+                self._current_path = project_dir
+                # Don't call os.chdir() here to avoid affecting the whole app
+
+        
+        # Path completion state
+        self._completion_state = {
+            'original_text': '',
+            'matches': [],
+            'current_index': -1
+        }
+        
         self._setup_ui()
         self._connect_signals()
         self._compile_git_patterns()
         
         self._search_helper = TerminalSearchHelper(self._output)
+        self._command_queue = queue.Queue()
+        self._workers = []
+        self._command_active = False
     
     def _setup_ui(self):
         """Initialize UI components."""
@@ -242,99 +271,33 @@ class Terminal(QDockWidget):
     
     def _create_toolbar(self) -> QWidget:
         """Create compact toolbar with mode on left, settings on right."""
-        toolbar_widget = QWidget()
-        toolbar_layout = QHBoxLayout(toolbar_widget)
-        toolbar_layout.setContentsMargins(4, 4, 4, 4)
+        toolbar_container = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar_container)
+        toolbar_layout.setContentsMargins(5, 2, 5, 2)
         toolbar_layout.setSpacing(8)
         
-        # Left side: Mode selection
+        self._path_label = QLabel()
+        self._path_label.setStyleSheet("""
+            QLabel {
+                color: #4EC9B0;
+                background-color: #2D2D30;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
+            }
+        """)
+        self._update_path_label()
+        
+        # Mode selection
         mode_label = QLabel("Mode:")
+        mode_label.setStyleSheet("color: #CCCCCC; padding-right: 5px;")
         toolbar_layout.addWidget(mode_label)
         
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(["Terminal", "Serial Port"])
         self._mode_combo.setMinimumWidth(100)
-        toolbar_layout.addWidget(self._mode_combo)
-        
-        toolbar_layout.addStretch()  # Push settings to the right
-        
-        # Right side: Serial port settings (hidden by default)
-        self._serial_settings_widget = QWidget()
-        serial_settings_layout = QHBoxLayout(self._serial_settings_widget)
-        serial_settings_layout.setContentsMargins(0, 0, 0, 0)
-        serial_settings_layout.setSpacing(6)
-        
-        # Port selection with info
-        port_label = QLabel("Port:")
-        serial_settings_layout.addWidget(port_label)
-        
-        self._port_combo = QComboBox()
-        self._port_combo.setMinimumWidth(200)
-        serial_settings_layout.addWidget(self._port_combo)
-        
-        # Refresh ports button
-        self._refresh_ports_btn = QPushButton()
-        self._refresh_ports_btn.setIcon(QIcon.fromTheme("view-refresh"))
-        self._refresh_ports_btn.setToolTip("Refresh available ports")
-        self._refresh_ports_btn.setMaximumWidth(28)
-        serial_settings_layout.addWidget(self._refresh_ports_btn)
-        
-        # Separator
-        sep1 = QLabel("|")
-        sep1.setStyleSheet("color: #555;")
-        serial_settings_layout.addWidget(sep1)
-        
-        # Baud rate
-        baud_label = QLabel("Baud:")
-        serial_settings_layout.addWidget(baud_label)
-        
-        self._baud_combo = QComboBox()
-        self._baud_combo.addItems(["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"])
-        self._baud_combo.setCurrentText("115200")
-        self._baud_combo.setMinimumWidth(80)
-        serial_settings_layout.addWidget(self._baud_combo)
-        
-        # Separator
-        sep2 = QLabel("|")
-        sep2.setStyleSheet("color: #555;")
-        serial_settings_layout.addWidget(sep2)
-        
-        # Connect/Disconnect button
-        self._connect_btn = QPushButton("Connect")
-        self._connect_btn.setMinimumWidth(80)
-        serial_settings_layout.addWidget(self._connect_btn)
-        
-        # Clear button
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.clicked.connect(lambda: self._output.clear())
-        serial_settings_layout.addWidget(self._clear_btn)
-        
-        self._auto_scroll_btn = QPushButton("Auto Scroll: ON")
-        self._auto_scroll_btn.setCheckable(True)
-        self._auto_scroll_btn.setChecked(True)
-        self._auto_scroll_btn.setToolTip("Toggle auto-scrolling to bottom")
-        self._auto_scroll_btn.clicked.connect(self._toggle_auto_scroll)
-        serial_settings_layout.addWidget(self._auto_scroll_btn)
-        
-        # Color config button
-        self._color_config_btn = QPushButton()
-        self._color_config_btn.setIcon(QIcon.fromTheme("preferences-desktop-color"))
-        self._color_config_btn.setToolTip("Customize terminal colors")
-        self._color_config_btn.setMaximumWidth(28)
-        serial_settings_layout.addWidget(self._color_config_btn)
-        
-        self._serial_settings_widget.setVisible(False)  # Hidden initially
-        toolbar_layout.addWidget(self._serial_settings_widget)
-        
-        toolbar_widget.setStyleSheet("""
-            QWidget {
-                background-color: #2D2D2D;
-                border-radius: 4px;
-            }
-            QLabel {
-                color: #CCCCCC;
-                font-size: 11px;
-            }
+        self._mode_combo.setStyleSheet("""
             QComboBox {
                 background-color: #3C3C3C;
                 color: #CCCCCC;
@@ -369,6 +332,147 @@ class Terminal(QDockWidget):
             QComboBox QAbstractItemView::item:hover {
                 background-color: #3C3C3C;
             }
+        """)
+        toolbar_layout.addWidget(self._mode_combo)
+        
+        toolbar_layout.addStretch()  # Push settings to the right
+        
+        toolbar_layout.addWidget(self._path_label)
+        
+        # Serial settings widget (hidden by default)
+        self._serial_settings_widget = QWidget()
+        serial_settings_layout = QHBoxLayout(self._serial_settings_widget)
+        serial_settings_layout.setContentsMargins(0, 0, 0, 0)
+        serial_settings_layout.setSpacing(6)
+        
+        # Port selection with info
+        port_label = QLabel("Port:")
+        port_label.setStyleSheet("color: #CCCCCC; padding-right: 5px;")
+        serial_settings_layout.addWidget(port_label)
+        
+        self._port_combo = QComboBox()
+        self._port_combo.setMinimumWidth(200)
+        self._port_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #3C3C3C;
+                color: #CCCCCC;
+                border: 1px solid #4C4C4C;
+                border-radius: 3px;
+                padding: 3px 8px;
+            }
+            QComboBox:hover {
+                border-color: #007ACC;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #CCCCCC;
+                margin-right: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2D2D2D;
+                color: #CCCCCC;
+                selection-background-color: #007ACC;
+                selection-color: #FFFFFF;
+                border: 1px solid #4C4C4C;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 4px 8px;
+                min-height: 20px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3C3C3C;
+            }
+        """)
+        serial_settings_layout.addWidget(self._port_combo)
+        
+        # Refresh ports button
+        self._refresh_ports_btn = QPushButton()
+        self._refresh_ports_btn.setIcon(QIcon.fromTheme("view-refresh"))
+        self._refresh_ports_btn.setToolTip("Refresh available ports")
+        self._refresh_ports_btn.setMaximumWidth(28)
+        self._refresh_ports_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3C3C3C;
+                border: 1px solid #4C4C4C;
+                border-radius: 3px;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                background-color: #4C4C4C;
+                border-color: #007ACC;
+            }
+            QPushButton:pressed {
+                background-color: #5A5A5A;
+            }
+        """)
+        serial_settings_layout.addWidget(self._refresh_ports_btn)
+        
+        # Separator
+        sep1 = QLabel("|")
+        sep1.setStyleSheet("color: #555;")
+        serial_settings_layout.addWidget(sep1)
+        
+        # Baud rate
+        baud_label = QLabel("Baud:")
+        baud_label.setStyleSheet("color: #CCCCCC; padding-right: 5px;")
+        serial_settings_layout.addWidget(baud_label)
+        
+        self._baud_combo = QComboBox()
+        self._baud_combo.addItems(["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"])
+        self._baud_combo.setCurrentText("115200")
+        self._baud_combo.setMinimumWidth(80)
+        self._baud_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #3C3C3C;
+                color: #CCCCCC;
+                border: 1px solid #4C4C4C;
+                border-radius: 3px;
+                padding: 3px 8px;
+            }
+            QComboBox:hover {
+                border-color: #007ACC;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #CCCCCC;
+                margin-right: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2D2D2D;
+                color: #CCCCCC;
+                selection-background-color: #007ACC;
+                selection-color: #FFFFFF;
+                border: 1px solid #4C4C4C;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 4px 8px;
+                min-height: 20px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3C3C3C;
+            }
+        """)
+        serial_settings_layout.addWidget(self._baud_combo)
+        
+        # Separator
+        sep2 = QLabel("|")
+        sep2.setStyleSheet("color: #555;")
+        serial_settings_layout.addWidget(sep2)
+        
+        # Connect/Disconnect button
+        self._connect_btn = QPushButton("Connect")
+        self._connect_btn.setMinimumWidth(80)
+        self._connect_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0E639C;
                 color: white;
@@ -387,15 +491,83 @@ class Terminal(QDockWidget):
                 background-color: #4C4C4C;
                 color: #808080;
             }
-            QPushButton:checked {
-                background-color: #16825D;
+        """)
+        serial_settings_layout.addWidget(self._connect_btn)
+        
+        # Clear button
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.clicked.connect(self._clear_terminal)
+        self._clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3C3C3C;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 4px 12px;
+                font-size: 11px;
             }
-            QPushButton:checked:hover {
-                background-color: #1E9670;
+            QPushButton:hover {
+                background-color: #4C4C4C;
+                border-color: #007ACC;
+            }
+            QPushButton:pressed {
+                background-color: #5A5A5A;
             }
         """)
+        serial_settings_layout.addWidget(self._clear_btn)
         
-        return toolbar_widget
+        self._auto_scroll_btn = QPushButton("Auto Scroll: ON")
+        self._auto_scroll_btn.setCheckable(True)
+        self._auto_scroll_btn.setChecked(True)
+        self._auto_scroll_btn.setToolTip("Toggle auto-scrolling to bottom")
+        self._auto_scroll_btn.clicked.connect(self._toggle_auto_scroll)
+        self._auto_scroll_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #16825D;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 4px 12px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #1E9670;
+            }
+            QPushButton:checked {
+                background-color: #9C4221;
+            }
+            QPushButton:checked:hover {
+                background-color: #A0512F;
+            }
+        """)
+        serial_settings_layout.addWidget(self._auto_scroll_btn)
+        
+        # Color config button
+        self._color_config_btn = QPushButton()
+        self._color_config_btn.setIcon(QIcon.fromTheme("preferences-desktop-color"))
+        self._color_config_btn.setToolTip("Customize terminal colors")
+        self._color_config_btn.setMaximumWidth(28)
+        self._color_config_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3C3C3C;
+                border: 1px solid #4C4C4C;
+                border-radius: 3px;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                background-color: #4C4C4C;
+                border-color: #007ACC;
+            }
+            QPushButton:pressed {
+                background-color: #5A5A5A;
+            }
+        """)
+        serial_settings_layout.addWidget(self._color_config_btn)
+        
+        self._serial_settings_widget.setVisible(False)  # Hidden initially
+        toolbar_layout.addWidget(self._serial_settings_widget)
+        
+        return toolbar_container
 
     def _connect_signals(self):
         """Connect internal signals."""
@@ -410,7 +582,7 @@ class Terminal(QDockWidget):
         self._color_config_btn.clicked.connect(self._show_color_config)
         
         # Mode switching
-        self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         
         # Serial port controls
         self._refresh_ports_btn.clicked.connect(self._refresh_ports)
@@ -426,6 +598,10 @@ class Terminal(QDockWidget):
         if obj == self._input and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             
+            if key == Qt.Key.Key_Tab:
+                self._handle_path_completion()
+                return True
+            
             # Navigate command history with Up/Down arrows
             if key == Qt.Key.Key_Up:
                 if self._command_history and self._history_index < len(self._command_history) - 1:
@@ -440,12 +616,103 @@ class Terminal(QDockWidget):
                     self._history_index = -1
                     self._input.clear()
                 return True
+            else:
+                self._completion_state['current_index'] = -1
         
         return super().eventFilter(obj, event)
 
-    def _on_mode_changed(self, mode: str):
-        """Handle mode change between Terminal and Serial Port."""
-        self._serial_mode = (mode == "Serial Port")
+    def _handle_path_completion(self):
+        """Handle Tab key for path autocomplete."""
+        current_text = self._input.text()
+        cursor_pos = self._input.cursorPosition()
+        
+        # Get the word at cursor position (path fragment)
+        text_before_cursor = current_text[:cursor_pos]
+        parts = text_before_cursor.split()
+        
+        if not parts:
+            return
+        
+        # Get the last part (potential path)
+        path_fragment = parts[-1] if parts else ''
+        
+        # If this is a new completion, find matches
+        if self._completion_state['current_index'] == -1:
+            self._completion_state['original_text'] = current_text
+            self._completion_state['matches'] = self._get_path_completions(path_fragment)
+            self._completion_state['current_index'] = 0
+        else:
+            if not self._completion_state['matches']:
+                return
+            # Cycle through matches
+            self._completion_state['current_index'] = (
+                self._completion_state['current_index'] + 1
+            ) % len(self._completion_state['matches'])
+        
+        # Apply completion if we have matches
+        if self._completion_state['matches']:
+            match = self._completion_state['matches'][self._completion_state['current_index']]
+            # Replace the path fragment with the match
+            prefix = current_text[:cursor_pos - len(path_fragment)]
+            suffix = current_text[cursor_pos:]
+            new_text = prefix + match + suffix
+            self._input.setText(new_text)
+            self._input.setCursorPosition(len(prefix + match))
+    
+    def _get_path_completions(self, path_fragment: str) -> list:
+        """Get path completions for a given fragment."""
+        if not path_fragment:
+            path_fragment = '.'
+        
+        # Expand user home directory
+        path_fragment = os.path.expanduser(path_fragment)
+        
+        # Determine directory and prefix
+        if os.path.isdir(path_fragment):
+            directory = path_fragment
+            prefix = ''
+        else:
+            directory = os.path.dirname(path_fragment) or '.'
+            prefix = os.path.basename(path_fragment)
+        
+        # Make directory absolute
+        if not os.path.isabs(directory):
+            directory = os.path.join(self._current_path or os.getcwd(), directory)
+        
+        # Find matches
+        matches = []
+        try:
+            if os.path.isdir(directory):
+                for item in os.listdir(directory):
+                    if item.startswith(prefix) or not prefix:
+                        full_path = os.path.join(directory, item)
+                        # Add trailing slash for directories
+                        if os.path.isdir(full_path):
+                            matches.append(item + os.sep)
+                        else:
+                            matches.append(item)
+        except (PermissionError, OSError):
+            pass
+        
+        # Sort: directories first, then files
+        matches.sort(key=lambda x: (not x.endswith(os.sep), x.lower()))
+        
+        # Return absolute or relative paths based on input
+        if os.path.isabs(path_fragment):
+            return [os.path.join(directory, m) for m in matches]
+        else:
+            base_dir = os.path.dirname(path_fragment) if os.path.dirname(path_fragment) else ''
+            if base_dir:
+                return [os.path.join(base_dir, m) for m in matches]
+            return matches
+
+    def _on_mode_changed(self, index: int):
+        """Handle mode change between Terminal and Serial Port"""
+        self._serial_mode = (index == 1)  # 1 = Serial Port
+        
+        if hasattr(self, '_path_label'):
+            self._path_label.setVisible(not self._serial_mode)
+        
         self._serial_settings_widget.setVisible(self._serial_mode)
         self._filter_widget.setVisible(self._serial_mode)
         
@@ -515,6 +782,8 @@ class Terminal(QDockWidget):
     def _compile_git_patterns(self):
         """Compile regex patterns for git output formatting with optimization."""
         self._git_combined_pattern = re.compile(r'''
+            (?P<compile_cmd>\b(?:gcc|g\+\+|clang|python|javac|make)\b)|
+            (?P<compile_flag>-[A-Za-z0-9]+(?:\s+\S+)?)|
             (?P<branch>\b(?:main|master|develop|release/\S+|feature/\S+|bugfix/\S+|hotfix/\S+)\b)|
             (?P<commit>\b[a-f0-9]{7,40}\b)|
             (?P<remote>origin/\S+)|
@@ -541,7 +810,9 @@ class Terminal(QDockWidget):
             for group_name, group_value in match.groupdict().items():
                 if group_value:
                     color = TerminalColors.TEXT  # Default if not specifically mapped
-                    if group_name == 'branch': color = TerminalColors.GIT_BRANCH
+                    if group_name == 'compile_cmd': color = TerminalColors.COMPILE_COMMAND
+                    elif group_name == 'compile_flag': color = TerminalColors.COMPILE_FLAG
+                    elif group_name == 'branch': color = TerminalColors.GIT_BRANCH
                     elif group_name == 'commit': color = TerminalColors.GIT_COMMIT
                     elif group_name == 'remote': color = TerminalColors.GIT_REMOTE
                     elif group_name == 'tag': color = TerminalColors.GIT_TAG
@@ -549,7 +820,7 @@ class Terminal(QDockWidget):
                     elif group_name == 'delete': color = TerminalColors.GIT_DELETE
                     elif group_name == 'file_header': color = TerminalColors.FILE_HEADER
                     elif group_name == 'hunk_header': color = TerminalColors.GIT_BRANCH
-                    elif group_name == 'status': color = TerminalColors.GIT_MODIFIED # Default for status
+                    elif group_name == 'status': color = TerminalColors.GIT_MODIFIED
                     
                     cursor.insertHtml(f'<span style="color: {color};">{self._escape_html(group_value)}</span>')
                     break # Only apply color for the first matched group
@@ -577,8 +848,10 @@ class Terminal(QDockWidget):
         return color_map.get(log_type, TerminalColors.INFO)
     
     def _escape_html(self, text: str) -> str:
-        """Escape HTML special characters."""
-        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
+        """Escape HTML special characters and convert newlines to <br> tags."""
+        text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
+        text = text.replace('\n', '<br>')
+        return text
 
     def _write_prompt(self):
         """Write the prompt to output."""
@@ -695,6 +968,19 @@ class Terminal(QDockWidget):
             self.add_log("command", command)
             if len(parts) > 1:
                 path = parts[1]
+                
+                if path == ".":
+                    if self._parent and hasattr(self._parent, 'project_view') and self._parent.project_view:
+                        project_dir = self._parent.project_view.get_project_directory()
+                        if project_dir and os.path.isdir(project_dir):
+                            path = project_dir
+                        else:
+                            self.add_log("warning", "No project directory available")
+                            return True
+                    else:
+                        self.add_log("warning", "No project directory available")
+                        return True
+                
                 # Expand ~ and environment variables
                 path = os.path.expanduser(os.path.expandvars(path))
                 if not os.path.isabs(path):
@@ -702,14 +988,14 @@ class Terminal(QDockWidget):
                 path = os.path.normpath(path)
                 
                 if os.path.isdir(path):
-                    os.chdir(path)
-                    self._current_path = os.getcwd()
+                    self._current_path = path
+                    self._update_path_label()
                     self.add_log("success", f"Changed directory to: {self._current_path}")
                 else:
                     self.add_log("error", f"Directory not found: {path}")
             else:
                 self._current_path = os.path.expanduser("~")
-                os.chdir(self._current_path)
+                self._update_path_label()
                 self.add_log("success", f"Changed to home: {self._current_path}")
             return True
         elif cmd == "pwd":
@@ -723,12 +1009,14 @@ class Terminal(QDockWidget):
             help_text = """Built-in commands:
   clear, cls  - Clear terminal output
   cd <path>   - Change directory
+  cd .        - Go to project directory
   pwd         - Print working directory
   help        - Show this help message
 
 Shortcuts:
   Ctrl+T      - Toggle terminal
   Up/Down     - Navigate command history
+  Tab         - Path auto-completion
   Enter       - Execute command"""
             self.add_log("info", help_text)
             return True
@@ -739,7 +1027,7 @@ Shortcuts:
         """Set the current working directory."""
         if os.path.isdir(path):
             self._current_path = path
-            os.chdir(path)
+            self._update_path_label()
     
     def clear(self):
         """Clear terminal output."""
@@ -752,6 +1040,10 @@ Shortcuts:
         self._input.setFocus()
         self.show()
         self.raise_()
+    
+    def set_terminal_mode(self):
+        """Switch to Terminal mode (not Serial Port)"""
+        self._mode_combo.setCurrentIndex(0) # Index 0 = Terminal
     
     def _show_color_config(self):
         """Open color configuration dialog."""
@@ -990,6 +1282,22 @@ Shortcuts:
                 path = os.sep.join(['...'] + parts[-2:])
         return path
     
+    def _update_path_label(self):
+        """Update the current path label."""
+        if not hasattr(self, '_path_label'):
+            return
+            
+        path = self._current_path or os.getcwd()
+        # Shorten path if too long
+        display_path = path
+        if len(path) > 60:
+            parts = path.split(os.sep)
+            if len(parts) > 3:
+                display_path = os.sep.join(['...'] + parts[-2:])
+        
+        self._path_label.setText(f"📁 {display_path}")
+        self._path_label.setToolTip(f"Current directory: {path}")
+
     def _execute_input(self):
         """Execute command from input field."""
         command = self._input.text().strip()
@@ -1014,7 +1322,7 @@ Shortcuts:
         if self._handle_builtin(command):
             return
         
-        self.run_command(command)
+        self._execute_command(command)
     
     def _attempt_reconnect(self):
         """Attempt to reconnect to serial port."""
@@ -1067,7 +1375,9 @@ Shortcuts:
         cursor.insertText(text, fmt)
         
         self._output.setTextCursor(cursor)
-        self._output.ensureCursorVisible()
+        
+        if self._auto_scroll:
+            self._output.ensureCursorVisible()
 
     def _clear_terminal(self):
         """Clear terminal output."""
@@ -1123,3 +1433,53 @@ Shortcuts:
             scrollbar.setValue(scrollbar.maximum())
         else:
             self._auto_scroll_btn.setText("Auto Scroll: OFF")
+
+    def _handle_stdout(self):
+        """Handle standard output from the process."""
+        data = self._process.readAllStandardOutput().data().decode('utf-8', errors='replace')
+        self.add_log("stdout", data)
+
+    def _handle_stderr(self):
+        """Handle standard error from the process."""
+        data = self._process.readAllStandardError().data().decode('utf-8', errors='replace')
+        self.add_log("stderr", data)
+
+    def _handle_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
+        """Handle process completion."""
+        self._command_active = False
+        self._process = None  # Clear the process reference
+        
+        if exit_code == 0:
+            self.add_log("success", "")
+        else:
+            self.add_log("error", f"Command exited with code {exit_code}")
+        
+        # Reprompt if in terminal mode
+        if not self._serial_mode:
+            self._write_prompt()
+
+    def _execute_command(self, command: str):
+        """Execute a command in the terminal."""
+        try:
+            if not command:
+                return
+            
+            if self._handle_builtin(command):
+                return
+            
+            self.add_log("command", command)
+            
+            self._process = QProcess(self)
+            self._process.setWorkingDirectory(self._current_path or os.getcwd())
+            self._process.readyReadStandardOutput.connect(self._handle_stdout)
+            self._process.readyReadStandardError.connect(self._handle_stderr)
+            self._process.finished.connect(self._handle_process_finished)
+            
+            # Parse command with shell-like behavior
+            if sys.platform == "win32":
+                self._process.start("cmd.exe", ["/c", command])
+            else:
+                self._process.start("/bin/sh", ["-c", command])
+            
+        except Exception as e:
+            self.add_log("error", f"Failed to execute command: {str(e)}")

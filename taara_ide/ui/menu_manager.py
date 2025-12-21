@@ -154,6 +154,7 @@ class MenuManager:
         menu = self._menubar.addMenu("&Settings")
         
         menu.addAction(self._actions["settings.project_config"])
+        menu.addAction(self._actions["settings.c_project_config"])
         menu.addSeparator()
         
         # Tools submenu

@@ -122,7 +122,7 @@ class CompileWorker(QThread):
             cmd.append(f"-D{define}")
         
         for inc in self.options.include_paths:
-            cmd.extend(["-I", inc])
+            cmd.extend([f"-I{inc}"])
         
         cmd.extend(self.options.compiler_flags)
         cmd.extend(["-c", source, "-o", output])

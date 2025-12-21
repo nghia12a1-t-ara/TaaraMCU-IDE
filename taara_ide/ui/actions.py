@@ -80,6 +80,7 @@ ACTION_DEFINITIONS = {
     "settings.ctags_path": ActionDefinition("settings.ctags_path", "CTags Path Settings"),
     "settings.stm32_framework": ActionDefinition("settings.stm32_framework", "STM32 Framework Path"),
     "settings.project_config": ActionDefinition("settings.project_config", "Project Configuration"),
+    "settings.c_project_config": ActionDefinition("settings.c_project_config", "C Project Configuration (.cproject)"),
     
     # Language actions
     "lang.c": ActionDefinition("lang.c", "C"),
