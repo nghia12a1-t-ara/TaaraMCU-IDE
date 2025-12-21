@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QCloseEvent, QIcon
+from PyQt6.QtGui import QKeySequence, QShortcut
 
 from taara_ide.ui.actions import ActionManager
 from taara_ide.ui.menu_manager import MenuManager
@@ -84,6 +85,7 @@ class MainWindow(QMainWindow):
         
         self._editor_manager = EditorManager(self, self._tab_widget)
         self._connect_editor_manager()
+        self._setup_shortcuts()
         
         self._connect_actions()
         self._connect_services()
@@ -938,3 +940,24 @@ class MainWindow(QMainWindow):
         """Handle file open request from breadcrumb dropdown"""
         if self._editor_manager and os.path.isfile(file_path):
             self._editor_manager.open_editor(file_path)
+
+    # ========== Shortcut Alt Left/Right Setup ==========
+    def _navigate_back(self):
+        if self.editor_manager.can_navigate_back():
+            self.statusBar().showMessage("Navigated back", 2000)
+            self.editor_manager.navigate_back()
+        else:
+            self.statusBar().showMessage("No more back history", 2000)
+    
+    def _navigate_forward(self):
+        if self.editor_manager.can_navigate_forward():
+            self.statusBar().showMessage("Navigated forward", 2000)
+            self.editor_manager.navigate_forward()
+        else:
+            self.statusBar().showMessage("No more forward history", 2000)
+    
+    def _setup_shortcuts(self):
+        back_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
+        forward_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
+        back_shortcut.activated.connect(self._navigate_back)
+        forward_shortcut.activated.connect(self._navigate_forward)

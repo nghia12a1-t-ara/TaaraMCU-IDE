@@ -2,12 +2,14 @@
 Editor Manager - Manages multiple QScintilla editor tabs.
 """
 
-from PyQt6.QtWidgets import QMessageBox, QFileDialog, QTabWidget, QWidget, QVBoxLayout, QApplication
+from PyQt6.QtWidgets import QMessageBox, QFileDialog, QTabWidget
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QFileSystemWatcher, Qt
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Set, TYPE_CHECKING
+from typing import Optional, List, Set, Tuple, TYPE_CHECKING
 from PyQt6.Qsci import QsciAPIs, QsciScintilla
+from collections import deque
+import os
 
 from taara_ide.ui.editor.code_editor import CodeEditor
 from taara_ide.core.indexer.ctags_handler import CtagsHandler
@@ -15,6 +17,8 @@ from taara_ide.core.indexer.ctags_handler import CtagsHandler
 if TYPE_CHECKING:
     from taara_ide.ui.main_window import MainWindow
 
+MAX_HISTORY_SIZE    = 50
+MIN_LINE_DISTANCE   = 5
 
 class EditorManager(QObject):
     editor_created = pyqtSignal(object)  # CodeEditor - Emitted when a new editor is created
@@ -40,6 +44,10 @@ class EditorManager(QObject):
         # Untitled file numbering (like Notepad++)
         self._untitled_counter = 0
         self._untitled_numbers: set = set()  # Track used numbers
+
+        self._nav_history_back: deque = deque(maxlen=50)  # (filepath, line, column)
+        self._nav_history_forward: deque = deque(maxlen=50)
+        self._last_position: Optional[Tuple[str, int, int]] = None
         
         # Closed files history for reopen
         self._closed_files: list = []
@@ -553,30 +561,45 @@ class EditorManager(QObject):
                 editor.setWhitespaceVisibility(QsciScintilla.WhitespaceVisibility.WsInvisible)
     
     def goto_definition(self, word: str) -> bool:
+        """Jump to definition and save current position for navigation."""
         if not word:
             return False
+        
         current_path = self.get_current_filepath()
         if not current_path:
             return False
         
-        definition = self._ctags_handler.find_definition(word, current_path)
-        if definition:
-            if len(definition) == 2:
-                file_path, line = definition
-                column = 0
-            else:
-                file_path, line, column = definition
-            return self.open_file_at_line(file_path, line, column)
+        current_editor = self.get_current_editor()
+        if not current_editor:
+            return False
         
-        QMessageBox.information(
-            self._parent, "Go to Definition",
-            f"Definition for '{word}' not found."
-        )
-        return False
-    
+        # 1. Get current position (0-based from Scintilla)
+        current_line, current_column = current_editor.getCursorPosition()
+        
+        # 2. Find definition
+        definition = self._ctags_handler.find_definition(word, current_path)
+        if not definition:
+            QMessageBox.information(
+                self._parent, "Go to Definition",
+                f"Definition for '{word}' not found."
+            )
+            return False
+        
+        # 3. Parse definition location
+        if len(definition) == 2:
+            file_path, line = definition  # line is 1-based from ctags
+            column = 0
+        else:
+            file_path, line, column = definition  # line is 1-based from ctags
+        
+        # 4. Save current position to history (already 0-based from getCursorPosition)
+        self._save_navigation_position(current_path, current_line, current_column)
+        
+        # 5. Jump to definition
+        # Pass 1-based line from ctags, will be converted to 0-based in open_file_at_line()
+        return self.open_file_at_line(file_path, line, column)
+
     def open_file_at_line(self, file_path: str, line: int, column: int = 0) -> bool:
-        """Open file and navigate to specific line and column."""
-        import os
         if not os.path.exists(file_path):
             QMessageBox.warning(
                 self._parent, "Error",
@@ -592,10 +615,14 @@ class EditorManager(QObject):
             editor = self.open_editor(file_path)
         
         if editor:
-            editor.setCursorPosition(line - 1, column)
-            editor.ensureLineVisible(line - 1)
+            # Convert 1-based line to 0-based (Scintilla uses 0-based)
+            line_0based = line - 1
+            editor.setCursorPosition(line_0based, column)
+            editor.ensureLineVisible(line_0based)
+            
+            # Update navigation position (store as 0-based for consistency with getCursorPosition)
+            self._last_position = (file_path, line_0based, column)
             return True
-        
         return False
     
     # ========== Accessors ==========
@@ -899,3 +926,105 @@ class EditorManager(QObject):
         if file_path:
             return os.path.normpath(os.path.abspath(file_path)).lower()
         return ""
+
+    def _save_navigation_position(self, filepath: str, line: int, column: int):
+        """
+        Save a position to navigation history.
+        This should be the position we want to return to when pressing Alt+Left.
+        
+        Args:
+            filepath: File path of the position to save
+            line: Line number (0-based)
+            column: Column number (0-based)
+        """
+        position = (filepath, line, column)
+        
+        # Don't save if same as last saved position
+        if self._last_position == position:
+            return
+        
+        # Check minimum distance for same file
+        if self._last_position:
+            last_file, last_line, last_col = self._last_position
+            
+            # Same file and too close? Don't save
+            if filepath == last_file and abs(line - last_line) < MIN_LINE_DISTANCE:
+                return
+        self._nav_history_back.append(position)
+        self._nav_history_forward.clear()
+        self._last_position = position
+    
+    def navigate_back(self) -> bool:
+        """Navigate to previous position (Alt+Left)."""
+        if not self._nav_history_back:
+            return False
+        
+        # Get previous position
+        prev_filepath, prev_line, prev_column = self._nav_history_back.pop()
+        
+        # Check if file exists
+        if not os.path.exists(prev_filepath):
+            return self.navigate_back()  # Skip and try next
+        
+        # Save CURRENT position to forward history
+        current_editor = self.get_current_editor()
+        if current_editor:
+            current_path = self.get_current_filepath()
+            if current_path:
+                current_line, current_col = current_editor.getCursorPosition()
+                current_pos = (current_path, current_line, current_col)
+                
+                # Only save if different from target
+                if current_pos != (prev_filepath, prev_line, prev_column):
+                    self._nav_history_forward.append(current_pos)
+        
+        # Navigate to previous position
+        editor = self.get_editor_by_path(prev_filepath)
+        if editor:
+            self._tab_widget.setCurrentWidget(editor)
+        else:
+            editor = self.open_editor(prev_filepath)
+        
+        if editor:
+            editor.setCursorPosition(prev_line, prev_column)
+            editor.ensureLineVisible(prev_line)
+            self._last_position = (prev_filepath, prev_line, prev_column)
+            return True
+        else:
+            return self.navigate_back()
+
+    def navigate_forward(self) -> bool:
+        """Navigate to next position (Alt+Right)."""
+        if not self._nav_history_forward:
+            return False
+        next_filepath, next_line, next_column = self._nav_history_forward.pop()
+        if not os.path.exists(next_filepath):
+            return self.navigate_forward()
+        
+        # Save current to back (if different from target)
+        if self._last_position and self._last_position != (next_filepath, next_line, next_column):
+            self._nav_history_back.append(self._last_position)
+        
+        # Navigate
+        editor = self.get_editor_by_path(next_filepath)
+        if editor:
+            self._tab_widget.setCurrentWidget(editor)
+        else:
+            editor = self.open_editor(next_filepath)
+        
+        if editor:
+            editor.setCursorPosition(next_line, next_column)
+            editor.ensureLineVisible(next_line)
+            self._last_position = (next_filepath, next_line, next_column)
+            return True
+        else:
+            return self.navigate_forward()
+        
+    def can_navigate_back(self) -> bool:
+        """Check if can navigate back."""
+        return len(self._nav_history_back) > 0
+    
+    def can_navigate_forward(self) -> bool:
+        """Check if can navigate forward."""
+        return len(self._nav_history_forward) > 0
+    
