@@ -18,6 +18,7 @@ class SerialSettingsDialog(QDialog):
         self._current_settings = current_settings
         self._setup_ui()
         self._load_settings()
+        parent._port_combo = self._port_combo  # Fix for terminal panel access issue
         
     def _setup_ui(self):
         layout = QVBoxLayout(self)

@@ -4,18 +4,18 @@ Terminal Panel - Embedded terminal for command execution.
 
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLineEdit, QComboBox, QPushButton,
-    QLabel, QToolBar, QSplitter, QMenu, QDialog
+    QTextEdit, QLineEdit, QPushButton,
+    QLabel, QMessageBox, QMenu, QDialog
 )
-from PyQt6.QtGui import QColor, QPalette, QFont, QTextCursor, QTextCharFormat, QIcon
-from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal as Signal, QTimer
+from PyQt6.QtGui import QColor, QFont, QTextCursor, QTextCharFormat, QIcon
+from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal as Signal, QTimer, QPropertyAnimation, QEasingCurve
 import subprocess
 import os
 import queue
 import shlex
 import re
 import sys
-from typing import Optional, Callable, List, TYPE_CHECKING
+from typing import Optional, Callable, TYPE_CHECKING
 from datetime import datetime
 
 from taara_ide.utils.process_utils import get_subprocess_flags
@@ -162,7 +162,8 @@ class Terminal(QDockWidget):
         self._auto_scroll = True
         
         self._active_filter = {'log_types': {'all'}, 'custom_pattern': ''}
-        self._search_helper = None  # Will be initialized after UI setup
+        self._search_helper = None
+        self._timestamp_exclusions = {'stdout', 'stderr', 'info'}
         
         self._serial_hex_mode = False
         
@@ -269,6 +270,14 @@ class Terminal(QDockWidget):
         
         self.setWidget(main_widget)
     
+    def _update_connection_status(self, connected: bool):
+        if connected:
+            self._status_label.setText("● Connected")
+            self._status_label.setStyleSheet("color: #4EC9B0;")  # Green
+        else:
+            self._status_label.setText("● Disconnected")
+            self._status_label.setStyleSheet("color: #808080;")  # Gray
+
     def _create_toolbar(self) -> QWidget:
         """Create compact toolbar with mode on left, settings on right."""
         toolbar_container = QWidget()
@@ -338,13 +347,7 @@ class Terminal(QDockWidget):
         
         # Status indicator (for serial connection)
         self._status_label = QLabel("● Disconnected")
-        self._status_label.setStyleSheet("""
-            QLabel {
-                color: #808080;
-                font-size: 11px;
-                padding: 2px 8px;
-            }
-        """)
+        self._update_connection_status(False)
         self._status_label.setVisible(False)  # Hidden in terminal mode
         toolbar_layout.addWidget(self._status_label)
         
@@ -534,10 +537,18 @@ class Terminal(QDockWidget):
         """Show serial port settings dialog."""
         from taara_ide.ui.dialogs.serial_settings_dialog import SerialSettingsDialog
         
+        was_connected = self._serial_manager.is_connected()
+        current_port = self._serial_manager.get_port_name()
+        
         dialog = SerialSettingsDialog(self._serial_settings, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._serial_settings = dialog.get_settings()
-            
+
+            # Auto-reconnect if settings changed
+            if was_connected:
+                if self._serial_settings['port'] != current_port:
+                    QMessageBox.information(self, "Port Changed", "Click 'Connect' to apply new port settings.")
+
             # Apply settings if connected
             if self._serial_manager.is_connected():
                 self._serial_manager.disconnect()
@@ -559,11 +570,28 @@ class Terminal(QDockWidget):
         """Refresh serial ports and show in settings if dialog is open."""
         # Just trigger a refresh - actual update happens in dialog
         pass
-    
+
     def _toggle_filter_bar(self):
-        """Toggle search/filter bar visibility."""
-        self._filter_widget.setVisible(not self._filter_widget.isVisible())
-        self._search_btn.setChecked(self._filter_widget.isVisible())
+        visible = not self._filter_widget.isVisible()
+        
+        if visible:
+            self._filter_widget.setVisible(True)
+            animation = QPropertyAnimation(self._filter_widget, b"maximumHeight")
+            animation.setDuration(150)
+            animation.setStartValue(0)
+            animation.setEndValue(50)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.start()
+        else:
+            animation = QPropertyAnimation(self._filter_widget, b"maximumHeight")
+            animation.setDuration(150)
+            animation.setStartValue(50)
+            animation.setEndValue(0)
+            animation.setEasingCurve(QEasingCurve.Type.InCubic)
+            animation.finished.connect(lambda: self._filter_widget.setVisible(False))
+            animation.start()
+        
+        self._search_btn.setChecked(visible)
     
     def _toggle_auto_scroll(self):
         """Toggle auto-scroll feature."""
@@ -583,24 +611,49 @@ class Terminal(QDockWidget):
         self._serial_settings['hex_view'] = self._serial_hex_mode
     
     def _export_logs(self):
-        """Export terminal logs to file."""
         from PyQt6.QtWidgets import QFileDialog
         import datetime
         
-        filename, _ = QFileDialog.getSaveFileName(
+        default_name = f"terminal_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        
+        filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Export Terminal Logs",
-            f"terminal_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            "Text Files (*.txt);;All Files (*.*)"
+            default_name,
+            "Text Files (*.txt);;HTML Files (*.html);;All Files (*.*)"
         )
         
         if filename:
             try:
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(self._output.toPlainText())
-                self.append_output(f"Logs exported to: {filename}\n", TerminalColors.SUCCESS)
+                if selected_filter == "HTML Files (*.html)":
+                    # Export with HTML formatting (colors preserved)
+                    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Terminal Log - {datetime.datetime.now()}</title>
+        <style>
+            body {{ background: {TerminalColors.BACKGROUND}; 
+                    color: {TerminalColors.TEXT}; 
+                    font-family: monospace; }}
+        </style>
+    </head>
+    <body>
+    {self._output.toHtml()}
+    </body>
+    </html>
+    """
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                else:
+                    # Plain text export
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        f.write(self._output.toPlainText())
+                
+                self.add_log("success", f"Logs exported to: {filename}")
             except Exception as e:
-                self.append_output(f"Failed to export logs: {e}\n", TerminalColors.ERROR)
+                self.add_log("error", f"Export failed: {e}")
 
     def eventFilter(self, obj, event):
         """Handle key events for command history navigation"""
@@ -1214,7 +1267,8 @@ Shortcuts:
         
         # Add timestamp if enabled (and not serial RX data)
         show_timestamp = self._serial_settings.get('show_timestamps', True)
-        if log_type != "stdout" and log_type != "stderr" and log_type != "info" and show_timestamp:
+        is_serial_rx = log_type == "info" and message.startswith("RX:")
+        if show_timestamp and (is_serial_rx or log_type not in self._timestamp_exclusions):
             timestamp_str = datetime.now().strftime('%H:%M:%S')
             cursor.insertHtml(f'<span style="color: #858585;">[{timestamp_str}] </span>')
 
