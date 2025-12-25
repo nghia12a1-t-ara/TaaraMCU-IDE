@@ -31,6 +31,7 @@ from taara_ide.ui.panels.search_panel import SearchPanel
 from taara_ide.ui.panels.git_panel import GitPanel
 from taara_ide.ui.panels.extensions_panel import ExtensionsPanel
 from taara_ide.ui.panels.debug_sidebar import DebugSidebarPanel
+from taara_ide.ui.controllers import BuildController  # Import BuildController
 
 from taara_ide.config import SettingsManager, AppConstants
 from taara_ide.services import ProjectService, BuildService, DebugService
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         self._project_view = None
         self._function_list = None
         self._terminal = None
+        self._terminal_dock = None # Add _terminal_dock declaration
         self._debugger_panel = None
         self._debugger_dock = None  # Add _debugger_dock variable declaration
         self._activity_bar = None
@@ -87,11 +89,29 @@ class MainWindow(QMainWindow):
         self._editor_manager = EditorManager(self, self._tab_widget)
         self._connect_editor_manager()
         self._setup_shortcuts()
+
+        # Flag to indicate if a run is pending after build completion
+        self._pending_run_after_build = False
+        self._build_controller = BuildController(
+            self, 
+            self._build_service,
+            self._project_service,
+            self._project_view,
+            self._editor_manager,
+            self._terminal
+        )
         
         self._connect_actions()
-        self._connect_services()
+        self._connect_services() # Changed from _connect_signals to _connect_services
         self._restore_state()
         
+        # Connect build controller signals
+        self._build_controller.build_output.connect(self._on_build_output)
+        self._build_controller.build_finished.connect(self._on_build_finished)
+        self._build_controller.status_message.connect(
+            lambda msg, timeout: self._status_manager.set_message(msg, timeout)
+        )
+
         # Ensure at least one Untitled editor is open if no tabs were restored
         if self._tab_widget.count() == 0:
             self._editor_manager.new_editor()
@@ -186,7 +206,7 @@ class MainWindow(QMainWindow):
         
         self._center_splitter.addWidget(editor_area)
         
-        self._tab_widget.tabBar().setStyleSheet("""
+        self._tab_widget. tabBar().setStyleSheet("""
             QTabBar::tab {
                 background: #d8dded;
                 padding: 7px 16px;
@@ -220,15 +240,15 @@ class MainWindow(QMainWindow):
         self._right_panel.setVisible(right_panel_visible)
         self._actions.set_checked("view.function_list", right_panel_visible)
         
+        # Create dock widgets
+        self._setup_dock_widgets()
+
         # Set splitter sizes
         self._main_splitter.setSizes([250, 750])
         if right_panel_visible:
             self._center_splitter.setSizes([600, 300])
         else:
             self._center_splitter.setSizes([800, 0])
-        
-        # Create dock widgets
-        self._setup_dock_widgets()
     
     def _on_activity_panel_changed(self, panel_id: str):
         """Handle activity bar panel change"""
@@ -271,12 +291,15 @@ class MainWindow(QMainWindow):
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels"""
         self._terminal = Terminal(self)
-        self._terminal.setObjectName("TerminalDock")
-        self._terminal.setAllowedAreas(
+        self._terminal_dock = QDockWidget("Terminal", self) # Add _terminal_dock
+        self._terminal_dock.setObjectName("TerminalDock")
+        self._terminal_dock.setWidget(self._terminal)
+        self._terminal_dock.setAllowedAreas(
             Qt.DockWidgetArea.BottomDockWidgetArea | 
             Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._terminal)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._terminal_dock)
+        self._terminal_dock.hide() # Initially hide the dock
         
         self._debugger_dock = QDockWidget("Debugger", self)
         self._debugger_dock.setObjectName("DebuggerDock")
@@ -365,7 +388,7 @@ class MainWindow(QMainWindow):
             self._function_list.update_symbols(symbols)
     
     def _connect_actions(self) -> None:
-        """Connect actions to handlers"""
+        """Connect actions to their handlers"""
         # File actions - Use EditorManager methods
         self._actions.connect_many({
             "file.new": self._editor_manager.new_editor,
@@ -409,12 +432,12 @@ class MainWindow(QMainWindow):
         self._actions.set_checked("view.terminal", self._terminal.isVisible())
         self._actions.set_checked("view.debugger", self._debugger_dock.isVisible())
         
-        # Build actions
+        # Build actions - Use build controller for build actions
         self._actions.connect_many({
-            "build.clean": self._clean,
-            "build.compile": self._compile,
-            "build.compile_run": self._compile_and_run,
-            "build.flash": self._flash,
+            "build.clean": self._build_controller.clean,
+            "build.compile": lambda: self._build_controller.compile(run_after_build=False),
+            "build.compile_run": lambda: self._build_controller.compile(run_after_build=True),
+            "build.flash": self._build_controller.flash,
         })
         
         # Debug actions
@@ -439,26 +462,17 @@ class MainWindow(QMainWindow):
             "help.install_framework": self._show_install_framework,
         })
     
-    def _connect_services(self) -> None:
+    def _connect_services(self) -> None: # Renamed from _connect_signals
         """Connect service signals"""
         # Project service
         self._project_service.project_opened.connect(self._on_project_opened)
         self._project_service.project_closed.connect(self._on_project_closed)
         
-        # Build service
-        self._build_service.build_started.connect(
-            lambda: self._status_manager.set_message("Building...")
-        )
+        # Build service signals
         self._build_service.build_progress.connect(
             lambda msg, pct: self._status_manager.set_message(f"Building: {msg}")
         )
-        self._build_service.build_output.connect(self._on_build_output)
-        self._build_service.build_finished.connect(self._on_build_finished)
-        
-        # Debug service
-        self._debug_service.session_started.connect(self._on_debug_started)
-        self._debug_service.session_ended.connect(self._on_debug_ended)
-        self._debug_service.execution_paused.connect(self._on_debug_paused)
+        # Note: build_output and build_finished now handled by BuildController
     
     # ========== File Operations ==========
     
@@ -549,145 +563,14 @@ class MainWindow(QMainWindow):
         dialog.exec()
     
     # ========== Build Operations ==========
-    
-    def _clean(self) -> None:
-        """Clean build"""
-        self._build_service.clean()
-    
-    def _compile(self) -> None:
-        """Compile project"""
-        if self._terminal:
-            if not self._terminal.isVisible():
-                self._terminal.setVisible(True)
-                self._actions.set_checked("view.terminal", True)
-            self._terminal.set_terminal_mode()
-        
-        if not self._project_service.is_open:
-            # Try to find .cproject in current directory
-            current_dir = None
-            if self._project_view:
-                current_dir = self._project_view.get_project_directory()
-            
-            if current_dir:
-                cproject_path = os.path.join(current_dir, ".cproject")
-                if os.path.exists(cproject_path):
-                    # Build C project using .cproject
-                    self._compile_c_project(current_dir)
-                    return
-            
-            # No .cproject found, try to compile current file
-            editor = self._editor_manager.get_current_editor()
-            if editor and editor.file_path:
-                self._compile_single_file(editor.file_path)
-            else:
-                self._status_manager.set_message("No project or file to compile", 3000)
-        else:
-            self._build_service.build()
-
-    def _compile_c_project(self, project_path: str) -> None:
-        """Compile C project using .cproject configuration"""
-        from taara_ide.core.compiler import NativeCCompiler
-        from taara_ide.core.compiler.c_project_config import CProjectConfigManager
-        
-        # Load .cproject
-        c_config = CProjectConfigManager.load(project_path)
-        if not c_config:
-            self._status_manager.set_message("Failed to load .cproject", 3000)
-            return
-        
-        # Create compiler and connect signals
-        compiler = NativeCCompiler(self)
-        compiler.compile_output.connect(self._on_build_output)
-        compiler.compile_finished.connect(lambda success, errors:
-            self._status_manager.set_message(
-                "Build successful" if success else "Build failed",
-                3000
-            )
-        )
-        
-        # Start compilation
-        self._status_manager.set_message("Building C project...", 0)
-        compiler.compile_project(project_path, c_config)
-
-    
-    def _compile_single_file(self, file_path: str) -> None:
-        """Compile a single file without a project"""
-        from taara_ide.core.compiler import LanguageDetector, Language
-        
-        lang = LanguageDetector.detect(file_path)
-        
-        if lang == Language.PYTHON:
-            # Execute Python file
-            from taara_ide.core.compiler import PythonExecutor
-            executor = PythonExecutor(self)
-            executor.compile_output.connect(self._on_build_output)
-            executor.compile_finished.connect(lambda success, errors: 
-                self._status_manager.set_message(
-                    "Execution finished" if success else "Execution failed", 
-                    3000
-                )
-            )
-            executor.compile([file_path], "", {})
-            
-        elif lang in (Language.C, Language.CPP):
-            # Compile native C/C++
-            from taara_ide.core.compiler import NativeCCompiler
-            compiler = NativeCCompiler(self)
-            compiler.compile_output.connect(self._on_build_output)
-            compiler.compile_finished.connect(lambda success, errors:
-                self._status_manager.set_message(
-                    "Compilation successful" if success else "Compilation failed",
-                    3000
-                )
-            )
-            
-            build_dir = os.path.join(os.path.dirname(file_path), "build")
-            output_name = os.path.splitext(os.path.basename(file_path))[0]
-            
-            import platform
-            if platform.system() == "Windows":
-                output_path = os.path.join(build_dir, f"{output_name}.exe")
-            else:
-                output_path = os.path.join(build_dir, output_name)
-            
-            options = {
-                "build_dir": build_dir,
-                "optimization": "-O2",
-                "debug_info": True,
-                "defines": [],
-                "include_paths": [],
-                "compiler_flags": [],
-                "linker_flags": []
-            }
-            
-            compiler.compile([file_path], output_path, options)
-        else:
-            self._status_manager.set_message(
-                f"Cannot compile {lang.value} files", 
-                3000
-            )
-    
-    def _compile_and_run(self) -> None:
-        """Compile and run/flash"""
-        if self._terminal:
-            if not self._terminal.isVisible():
-                self._terminal.setVisible(True)
-                self._actions.set_checked("view.terminal", True)
-            self._terminal.set_terminal_mode()
-        
-        self._build_service.build()
-        # TODO: Flash after build
-
-    def _flash(self) -> None:
-        """Flash to target"""
-        # TODO: Implement flash
-        pass
+    # _compile_c_project, _compile_and_run, _flash, _run_executable, _on_unified_build_finished)
+    # They are now in BuildController
     
     def _on_build_output(self, output: str) -> None:
         """Handle build output"""
         if self._terminal:
             self._terminal.append_output(output)
-    
+
     def _on_build_finished(self, result) -> None:
         """Handle build finished"""
         if result.success:
@@ -1027,8 +910,8 @@ class MainWindow(QMainWindow):
         if checked is not None:
             visible = checked
         else:
-            visible = not self._terminal.isVisible()
-        self._terminal.setVisible(visible)
+            visible = not self._terminal_dock.isVisible() # Check dock visibility
+        self._terminal_dock.setVisible(visible) # Set dock visibility
         self._actions.set_checked("view.terminal", visible)
         if visible and hasattr(self._terminal, 'focus_input'):
             self._terminal.focus_input()

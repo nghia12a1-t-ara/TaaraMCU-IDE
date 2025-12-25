@@ -5,7 +5,7 @@ Terminal Panel - Embedded terminal for command execution.
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QComboBox, QPushButton,
-    QLabel, QToolBar, QSplitter
+    QLabel, QToolBar, QSplitter, QMenu, QDialog
 )
 from PyQt6.QtGui import QColor, QPalette, QFont, QTextCursor, QTextCharFormat, QIcon
 from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal as Signal, QTimer
@@ -126,23 +126,23 @@ class TerminalWorker(QThread):
 
 
 class Terminal(QDockWidget):
-    """
-    Embedded terminal panel for executing commands.
-    
-    Features:
-        - Command history navigation with up/down arrows
-        - Async command execution
-        - Command queue management
-        - Built-in commands: cd, clear, help
-        - Syntax highlighting for git commands
-        - Serial port communication (COM port)
-        - Log filtering and search
-    """
+    """Integrated Terminal and Serial Monitor."""
     
     def __init__(self, parent: Optional['MainWindow'] = None):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle("Terminal")
+        
+        self._serial_settings = {
+            'port': None,
+            'baud_rate': 115200,
+            'data_bits': 8,
+            'parity': 'None',
+            'stop_bits': 1,
+            'auto_reconnect': False,
+            'hex_view': False,
+            'show_timestamps': True,
+        }
         
         # Initialize command history
         self._command_history = []
@@ -276,200 +276,79 @@ class Terminal(QDockWidget):
         toolbar_layout.setContentsMargins(5, 2, 5, 2)
         toolbar_layout.setSpacing(8)
         
-        self._path_label = QLabel()
-        self._path_label.setStyleSheet("""
-            QLabel {
-                color: #4EC9B0;
-                background-color: #2D2D30;
-                padding: 4px 8px;
-                border-radius: 3px;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 11px;
-            }
-        """)
-        self._update_path_label()
-        
-        # Mode selection
-        mode_label = QLabel("Mode:")
-        mode_label.setStyleSheet("color: #CCCCCC; padding-right: 5px;")
-        toolbar_layout.addWidget(mode_label)
-        
-        self._mode_combo = QComboBox()
-        self._mode_combo.addItems(["Terminal", "Serial Port"])
-        self._mode_combo.setMinimumWidth(100)
-        self._mode_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #3C3C3C;
-                color: #CCCCCC;
-                border: 1px solid #4C4C4C;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QComboBox:hover {
-                border-color: #007ACC;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #CCCCCC;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2D2D2D;
-                color: #CCCCCC;
-                selection-background-color: #007ACC;
-                selection-color: #FFFFFF;
-                border: 1px solid #4C4C4C;
-            }
-            QComboBox QAbstractItemView::item {
-                padding: 4px 8px;
-                min-height: 20px;
-            }
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #3C3C3C;
-            }
-        """)
-        toolbar_layout.addWidget(self._mode_combo)
-        
-        toolbar_layout.addStretch()  # Push settings to the right
-        
-        toolbar_layout.addWidget(self._path_label)
-        
-        # Serial settings widget (hidden by default)
-        self._serial_settings_widget = QWidget()
-        serial_settings_layout = QHBoxLayout(self._serial_settings_widget)
-        serial_settings_layout.setContentsMargins(0, 0, 0, 0)
-        serial_settings_layout.setSpacing(6)
-        
-        # Port selection with info
-        port_label = QLabel("Port:")
-        port_label.setStyleSheet("color: #CCCCCC; padding-right: 5px;")
-        serial_settings_layout.addWidget(port_label)
-        
-        self._port_combo = QComboBox()
-        self._port_combo.setMinimumWidth(200)
-        self._port_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #3C3C3C;
-                color: #CCCCCC;
-                border: 1px solid #4C4C4C;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QComboBox:hover {
-                border-color: #007ACC;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #CCCCCC;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2D2D2D;
-                color: #CCCCCC;
-                selection-background-color: #007ACC;
-                selection-color: #FFFFFF;
-                border: 1px solid #4C4C4C;
-            }
-            QComboBox QAbstractItemView::item {
-                padding: 4px 8px;
-                min-height: 20px;
-            }
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #3C3C3C;
-            }
-        """)
-        serial_settings_layout.addWidget(self._port_combo)
-        
-        # Refresh ports button
-        self._refresh_ports_btn = QPushButton()
-        self._refresh_ports_btn.setIcon(QIcon.fromTheme("view-refresh"))
-        self._refresh_ports_btn.setToolTip("Refresh available ports")
-        self._refresh_ports_btn.setMaximumWidth(28)
-        self._refresh_ports_btn.setStyleSheet("""
+        # Mode selector with dropdown menu
+        self._mode_btn = QPushButton()
+        self._mode_btn.setIcon(QIcon.fromTheme("utilities-terminal"))
+        self._mode_btn.setText("Terminal")
+        self._mode_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3C3C3C;
+                color: #CCCCCC;
                 border: 1px solid #4C4C4C;
                 border-radius: 3px;
-                padding: 4px;
+                padding: 4px 12px;
+                text-align: left;
             }
             QPushButton:hover {
-                background-color: #4C4C4C;
                 border-color: #007ACC;
             }
-            QPushButton:pressed {
-                background-color: #5A5A5A;
+            QPushButton::menu-indicator {
+                subcontrol-position: right center;
+                subcontrol-origin: padding;
+                left: -2px;
             }
         """)
-        serial_settings_layout.addWidget(self._refresh_ports_btn)
         
-        # Separator
-        sep1 = QLabel("|")
-        sep1.setStyleSheet("color: #555;")
-        serial_settings_layout.addWidget(sep1)
-        
-        # Baud rate
-        baud_label = QLabel("Baud:")
-        baud_label.setStyleSheet("color: #CCCCCC; padding-right: 5px;")
-        serial_settings_layout.addWidget(baud_label)
-        
-        self._baud_combo = QComboBox()
-        self._baud_combo.addItems(["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"])
-        self._baud_combo.setCurrentText("115200")
-        self._baud_combo.setMinimumWidth(80)
-        self._baud_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #3C3C3C;
-                color: #CCCCCC;
-                border: 1px solid #4C4C4C;
-                border-radius: 3px;
-                padding: 3px 8px;
-            }
-            QComboBox:hover {
-                border-color: #007ACC;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #CCCCCC;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
+        mode_menu = QMenu()
+        mode_menu.setStyleSheet("""
+            QMenu {
                 background-color: #2D2D2D;
                 color: #CCCCCC;
-                selection-background-color: #007ACC;
-                selection-color: #FFFFFF;
                 border: 1px solid #4C4C4C;
             }
-            QComboBox QAbstractItemView::item {
-                padding: 4px 8px;
-                min-height: 20px;
+            QMenu::item {
+                padding: 6px 20px;
             }
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #3C3C3C;
+            QMenu::item:selected {
+                background-color: #007ACC;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #4C4C4C;
+                margin: 4px 0px;
             }
         """)
-        serial_settings_layout.addWidget(self._baud_combo)
         
-        # Separator
-        sep2 = QLabel("|")
-        sep2.setStyleSheet("color: #555;")
-        serial_settings_layout.addWidget(sep2)
+        terminal_action = mode_menu.addAction("Terminal Mode")
+        terminal_action.triggered.connect(lambda: self._switch_mode(False))
         
-        # Connect/Disconnect button
+        serial_action = mode_menu.addAction("Serial Monitor")
+        serial_action.triggered.connect(lambda: self._switch_mode(True))
+        
+        mode_menu.addSeparator()
+        
+        settings_action = mode_menu.addAction("Serial Port Settings...")
+        settings_action.triggered.connect(self._show_serial_settings)
+        
+        refresh_action = mode_menu.addAction("Refresh Ports")
+        refresh_action.triggered.connect(self._refresh_ports)
+        
+        self._mode_btn.setMenu(mode_menu)
+        toolbar_layout.addWidget(self._mode_btn)
+        
+        # Status indicator (for serial connection)
+        self._status_label = QLabel("● Disconnected")
+        self._status_label.setStyleSheet("""
+            QLabel {
+                color: #808080;
+                font-size: 11px;
+                padding: 2px 8px;
+            }
+        """)
+        self._status_label.setVisible(False)  # Hidden in terminal mode
+        toolbar_layout.addWidget(self._status_label)
+        
+        # Connect/Disconnect button (serial mode only)
         self._connect_btn = QPushButton("Connect")
         self._connect_btn.setMinimumWidth(80)
         self._connect_btn.setStyleSheet("""
@@ -487,12 +366,51 @@ class Terminal(QDockWidget):
             QPushButton:pressed {
                 background-color: #005A9E;
             }
-            QPushButton:disabled {
-                background-color: #4C4C4C;
-                color: #808080;
+        """)
+        self._connect_btn.setVisible(False)  # Hidden in terminal mode
+        toolbar_layout.addWidget(self._connect_btn)
+        
+        toolbar_layout.addStretch()
+        
+        # Path label (terminal mode only)
+        self._path_label = QLabel()
+        self._path_label.setStyleSheet("""
+            QLabel {
+                color: #4EC9B0;
+                background-color: #2D2D30;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
             }
         """)
-        serial_settings_layout.addWidget(self._connect_btn)
+        self._update_path_label()
+        toolbar_layout.addWidget(self._path_label)
+        
+        # Search button
+        self._search_btn = QPushButton()
+        self._search_btn.setIcon(QIcon.fromTheme("edit-find"))
+        self._search_btn.setToolTip("Search & Filter")
+        self._search_btn.setCheckable(True)
+        self._search_btn.clicked.connect(self._toggle_filter_bar)
+        self._search_btn.setMaximumWidth(32)
+        self._search_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3C3C3C;
+                border: 1px solid #4C4C4C;
+                border-radius: 3px;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                background-color: #4C4C4C;
+                border-color: #007ACC;
+            }
+            QPushButton:checked {
+                background-color: #007ACC;
+                border-color: #007ACC;
+            }
+        """)
+        toolbar_layout.addWidget(self._search_btn)
         
         # Clear button
         self._clear_btn = QPushButton("Clear")
@@ -508,46 +426,57 @@ class Terminal(QDockWidget):
             }
             QPushButton:hover {
                 background-color: #4C4C4C;
-                border-color: #007ACC;
-            }
-            QPushButton:pressed {
-                background-color: #5A5A5A;
             }
         """)
-        serial_settings_layout.addWidget(self._clear_btn)
+        toolbar_layout.addWidget(self._clear_btn)
         
-        self._auto_scroll_btn = QPushButton("Auto Scroll: ON")
-        self._auto_scroll_btn.setCheckable(True)
-        self._auto_scroll_btn.setChecked(True)
-        self._auto_scroll_btn.setToolTip("Toggle auto-scrolling to bottom")
-        self._auto_scroll_btn.clicked.connect(self._toggle_auto_scroll)
-        self._auto_scroll_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #16825D;
-                color: white;
-                border: none;
-                border-radius: 3px;
-                padding: 4px 12px;
-                font-size: 11px;
+        # Options dropdown
+        self._options_btn = QPushButton()
+        self._options_btn.setIcon(QIcon.fromTheme("preferences-other"))
+        self._options_btn.setToolTip("Options")
+        self._options_btn.setMaximumWidth(32)
+        
+        options_menu = QMenu()
+        options_menu.setStyleSheet("""
+            QMenu {
+                background-color: #2D2D2D;
+                color: #CCCCCC;
+                border: 1px solid #4C4C4C;
             }
-            QPushButton:hover {
-                background-color: #1E9670;
+            QMenu::item {
+                padding: 6px 20px;
             }
-            QPushButton:checked {
-                background-color: #9C4221;
+            QMenu::item:selected {
+                background-color: #007ACC;
             }
-            QPushButton:checked:hover {
-                background-color: #A0512F;
+            QMenu::separator {
+                height: 1px;
+                background-color: #4C4C4C;
+                margin: 4px 0px;
             }
         """)
-        serial_settings_layout.addWidget(self._auto_scroll_btn)
         
-        # Color config button
-        self._color_config_btn = QPushButton()
-        self._color_config_btn.setIcon(QIcon.fromTheme("preferences-desktop-color"))
-        self._color_config_btn.setToolTip("Customize terminal colors")
-        self._color_config_btn.setMaximumWidth(28)
-        self._color_config_btn.setStyleSheet("""
+        # Auto scroll toggle
+        self._auto_scroll_action = options_menu.addAction("✓ Auto Scroll")
+        self._auto_scroll_action.setCheckable(True)
+        self._auto_scroll_action.setChecked(True)
+        self._auto_scroll_action.triggered.connect(self._toggle_auto_scroll)
+        
+        # Hex view toggle (serial mode)
+        self._hex_view_action = options_menu.addAction("Hex View Mode")
+        self._hex_view_action.setCheckable(True)
+        self._hex_view_action.triggered.connect(self._toggle_hex_view)
+        
+        options_menu.addSeparator()
+        
+        color_action = options_menu.addAction("Customize Colors...")
+        color_action.triggered.connect(self._show_color_config)
+        
+        export_action = options_menu.addAction("Export Logs...")
+        export_action.triggered.connect(self._export_logs)
+        
+        self._options_btn.setMenu(options_menu)
+        self._options_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3C3C3C;
                 border: 1px solid #4C4C4C;
@@ -558,14 +487,8 @@ class Terminal(QDockWidget):
                 background-color: #4C4C4C;
                 border-color: #007ACC;
             }
-            QPushButton:pressed {
-                background-color: #5A5A5A;
-            }
         """)
-        serial_settings_layout.addWidget(self._color_config_btn)
-        
-        self._serial_settings_widget.setVisible(False)  # Hidden initially
-        toolbar_layout.addWidget(self._serial_settings_widget)
+        toolbar_layout.addWidget(self._options_btn)
         
         return toolbar_container
 
@@ -577,21 +500,107 @@ class Terminal(QDockWidget):
         self._serial_manager.error_occurred.connect(self._on_serial_error)
         self._serial_manager.connection_changed.connect(self._on_serial_connection_changed)
         
-        # Terminal action buttons
-        self._clear_btn.clicked.connect(self._clear_terminal)
-        self._color_config_btn.clicked.connect(self._show_color_config)
-        
-        # Mode switching
-        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        
-        # Serial port controls
-        self._refresh_ports_btn.clicked.connect(self._refresh_ports)
         self._connect_btn.clicked.connect(self._toggle_serial_connection)
         
         self._filter_widget.filter_changed.connect(self._on_filter_changed)
         self._filter_widget.search_requested.connect(self._on_search_requested)
         self._filter_widget.search_next.connect(lambda: self._search_helper.next_match() if self._search_helper else None)
         self._filter_widget.search_previous.connect(lambda: self._search_helper.previous_match() if self._search_helper else None)
+    
+    def _switch_mode(self, serial_mode: bool):
+        """Switch between Terminal and Serial Monitor mode."""
+        self._serial_mode = serial_mode
+        
+        if serial_mode:
+            self._mode_btn.setText("Serial Monitor")
+            self._status_label.setVisible(True)
+            self._connect_btn.setVisible(True)
+            self._path_label.setVisible(False)
+            self._filter_widget.setVisible(True)  # Show in serial mode
+        else:
+            self._mode_btn.setText("Terminal")
+            self._status_label.setVisible(False)
+            self._connect_btn.setVisible(False)
+            self._path_label.setVisible(True)
+            self._filter_widget.setVisible(False)  # Hide in terminal mode
+        
+        # Update placeholder
+        if serial_mode:
+            self._input.setPlaceholderText("Enter data to send...")
+        else:
+            self._input.setPlaceholderText(f"{self._current_path} >>> Enter command...")
+    
+    def _show_serial_settings(self):
+        """Show serial port settings dialog."""
+        from taara_ide.ui.dialogs.serial_settings_dialog import SerialSettingsDialog
+        
+        dialog = SerialSettingsDialog(self._serial_settings, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._serial_settings = dialog.get_settings()
+            
+            # Apply settings if connected
+            if self._serial_manager.is_connected():
+                self._serial_manager.disconnect()
+                self._apply_serial_settings()
+                self._serial_manager.connect(
+                    self._serial_settings['port'],
+                    self._serial_settings['baud_rate']
+                )
+    
+    def _apply_serial_settings(self):
+        """Apply serial settings from dialog."""
+        self._serial_hex_mode = self._serial_settings.get('hex_view', False)
+        self._auto_reconnect_enabled = self._serial_settings.get('auto_reconnect', False)
+        
+        # Update hex view action
+        self._hex_view_action.setChecked(self._serial_hex_mode)
+    
+    def _refresh_ports(self):
+        """Refresh serial ports and show in settings if dialog is open."""
+        # Just trigger a refresh - actual update happens in dialog
+        pass
+    
+    def _toggle_filter_bar(self):
+        """Toggle search/filter bar visibility."""
+        self._filter_widget.setVisible(not self._filter_widget.isVisible())
+        self._search_btn.setChecked(self._filter_widget.isVisible())
+    
+    def _toggle_auto_scroll(self):
+        """Toggle auto-scroll feature."""
+        self._auto_scroll = not self._auto_scroll
+        self._auto_scroll_action.setChecked(self._auto_scroll)
+        
+        # Update action text
+        if self._auto_scroll:
+            self._auto_scroll_action.setText("✓ Auto Scroll")
+        else:
+            self._auto_scroll_action.setText("Auto Scroll")
+    
+    def _toggle_hex_view(self):
+        """Toggle hex view mode."""
+        self._serial_hex_mode = not self._serial_hex_mode
+        self._hex_view_action.setChecked(self._serial_hex_mode)
+        self._serial_settings['hex_view'] = self._serial_hex_mode
+    
+    def _export_logs(self):
+        """Export terminal logs to file."""
+        from PyQt6.QtWidgets import QFileDialog
+        import datetime
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Terminal Logs",
+            f"terminal_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            "Text Files (*.txt);;All Files (*.*)"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(self._output.toPlainText())
+                self.append_output(f"Logs exported to: {filename}\n", TerminalColors.SUCCESS)
+            except Exception as e:
+                self.append_output(f"Failed to export logs: {e}\n", TerminalColors.ERROR)
 
     def eventFilter(self, obj, event):
         """Handle key events for command history navigation"""
@@ -749,7 +758,7 @@ class Terminal(QDockWidget):
             self._serial_manager.disconnect_port()
         else:
             if self._port_combo.count() == 0 or self._port_combo.currentText() == "No COM Port":
-                self._append_output("[Terminal] No COM port available\n", TerminalColors.ERROR)
+                self.append_output_with_color("[Terminal] No COM port available\n", TerminalColors.ERROR)
                 return
             
             port_name = self._port_combo.currentData()  # Get stored port name
@@ -769,9 +778,9 @@ class Terminal(QDockWidget):
                         background-color: #E81123;
                     }
                 """)
-                self._append_output(f"[Terminal] Connected to {port_name} at {baud_rate} baud\n", TerminalColors.SUCCESS)
+                self.append_output_with_color(f"[Terminal] Connected to {port_name} at {baud_rate} baud\n", TerminalColors.SUCCESS)
             else:
-                self._append_output(f"[Terminal] Failed to connect to {port_name}\n", TerminalColors.ERROR)
+                self.append_output_with_color(f"[Terminal] Failed to connect to {port_name}\n", TerminalColors.ERROR)
     
     def _on_serial_connection_changed(self, is_connected: bool):
         """Handle serial connection status change."""
@@ -848,9 +857,13 @@ class Terminal(QDockWidget):
         return color_map.get(log_type, TerminalColors.INFO)
     
     def _escape_html(self, text: str) -> str:
-        """Escape HTML special characters and convert newlines to <br> tags."""
-        text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
-        text = text.replace('\n', '<br>')
+        """Escape HTML special characters and convert newlines to <br>"""
+        text = text.replace("&", "&amp;")
+        text = text.replace("<", "&lt;")
+        text = text.replace(">", "&gt;")
+        text = text.replace('"', "&quot;")
+        text = text.replace("'", "&#39;")
+        text = text.replace("\n", "<br>")
         return text
 
     def _write_prompt(self):
@@ -895,9 +908,12 @@ class Terminal(QDockWidget):
         if self._should_show_log(log_entry):
             self._display_log_entry(log_entry)
 
-    def append_output(self, text: str):
-        """Append text to terminal output."""
-        self.add_log("info", text)
+    def append_output(self, text: str, color: Optional[str] = None):
+        """Append text to terminal output, optionally with color."""
+        if color:
+            self.append_output_with_color(text, color)
+        else:
+            self.add_log("info", text)
     
     def run_command(self, command: str, on_finished: Optional[Callable] = None):
         """
@@ -943,10 +959,25 @@ class Terminal(QDockWidget):
         self._workers.append(worker)
         worker.start()
     
-    def execute(self, command: str):
-        """Execute a command (alias for run_command)."""
-        self.run_command(command)
+    def execute_command(self, command: str):
+        """
+        Execute a command in the terminal (public API for external use).
+        
+        Args:
+            command: Command string to execute
+        """
+        self._input.setText(command)
+        self._execute_input()
     
+    def set_terminal_mode(self):
+        """Switch terminal to Terminal mode (not Serial mode)."""
+        self._mode_btn.setText("Terminal")
+        self._switch_mode(False)
+    
+    def focus_input(self):
+        """Focus the command input field."""
+        self._input.setFocus()
+
     def _handle_builtin(self, command: str) -> bool:
         """
         Handle built-in terminal commands.
@@ -962,6 +993,7 @@ class Terminal(QDockWidget):
         
         if cmd == "clear" or cmd == "cls":
             self._output.clear()
+            self._log_buffer.clear() # Also clear buffer when clearing output
             return True
         elif cmd == "cd":
             self._last_command = command
@@ -1042,7 +1074,7 @@ Shortcuts:
         self.raise_()
     
     def set_terminal_mode(self):
-        """Switch to Terminal mode (not Serial Port)"""
+        """Switch terminal to Terminal mode (not Serial Port)"""
         self._mode_combo.setCurrentIndex(0) # Index 0 = Terminal
     
     def _show_color_config(self):
@@ -1180,6 +1212,12 @@ Shortcuts:
         cursor = self._output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         
+        # Add timestamp if enabled (and not serial RX data)
+        show_timestamp = self._serial_settings.get('show_timestamps', True)
+        if log_type != "stdout" and log_type != "stderr" and log_type != "info" and show_timestamp:
+            timestamp_str = datetime.now().strftime('%H:%M:%S')
+            cursor.insertHtml(f'<span style="color: #858585;">[{timestamp_str}] </span>')
+
         if is_git:
             self._format_git_output(cursor, message)
         else:
@@ -1354,18 +1392,23 @@ Shortcuts:
     def set_auto_scroll(self, enabled: bool):
         """Enable or disable auto-scrolling."""
         self._auto_scroll = enabled
-        self._auto_scroll_btn.setChecked(enabled)
-        self._auto_scroll_btn.setText(f"Auto Scroll: {'ON' if enabled else 'OFF'}")
+        self._auto_scroll_action.setChecked(enabled)
+        if enabled:
+            self._auto_scroll_action.setText("✓ Auto Scroll")
+        else:
+            self._auto_scroll_action.setText("Auto Scroll")
     
     def set_hex_view_mode(self, enabled: bool):
         """Enable or disable hex view mode for serial data."""
         self._serial_hex_mode = enabled
+        self._hex_view_action.setChecked(enabled)
     
     def set_auto_reconnect(self, enabled: bool):
         """Enable or disable auto-reconnect for serial port."""
         self._auto_reconnect_enabled = enabled
+        self._serial_settings['auto_reconnect'] = enabled
 
-    def _append_output(self, text: str, color: str):
+    def append_output_with_color(self, text: str, color: str):
         """Append text to terminal output with specified color."""
         cursor = self._output.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -1425,14 +1468,14 @@ Shortcuts:
 
     def _toggle_auto_scroll(self):
         """Toggle auto-scrolling on/off."""
-        self._auto_scroll = self._auto_scroll_btn.isChecked()
+        self._auto_scroll = self._auto_scroll_action.isChecked()
         if self._auto_scroll:
-            self._auto_scroll_btn.setText("Auto Scroll: ON")
+            self._auto_scroll_action.setText("✓ Auto Scroll")
             # Scroll to bottom immediately
             scrollbar = self._output.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
         else:
-            self._auto_scroll_btn.setText("Auto Scroll: OFF")
+            self._auto_scroll_action.setText("Auto Scroll")
 
     def _handle_stdout(self):
         """Handle standard output from the process."""

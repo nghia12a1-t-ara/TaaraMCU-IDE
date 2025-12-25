@@ -299,9 +299,14 @@ class BuildService(QObject):
         error_list = [e for e in errors if e.is_error]
         warning_list = [e for e in errors if not e.is_error]
         
+        output_file = None
+        if success and self._current_compiler:
+            if hasattr(self._current_compiler, '_worker') and self._current_compiler._worker:
+                output_file = self._current_compiler._worker.output_path
+        
         result = BuildResult(
             success=success,
-            output_file=None,  # TODO: Get from compiler
+            output_file=output_file,
             errors=error_list,
             warnings=warning_list,
             duration_ms=duration
@@ -309,6 +314,8 @@ class BuildService(QObject):
         
         if success:
             self.build_output.emit(f"Build successful ({duration}ms)")
+            if output_file:
+                self.build_output.emit(f"Output: {output_file}")
         else:
             self.build_output.emit(f"Build failed with {len(error_list)} error(s)")
         

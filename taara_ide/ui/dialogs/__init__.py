@@ -8,6 +8,7 @@ from .ctags_path_dialog import CtagsPathDialog
 from .create_project_dialog import CreateProjectDialog
 from .install_framework_dialog import InstallFrameworkDialog
 from .c_project_config_dialog import CProjectConfigDialog
+from .serial_settings_dialog import SerialSettingsDialog
 
 __all__ = [
     'FindDialog',
@@ -16,5 +17,6 @@ __all__ = [
     'CtagsPathDialog',
     'CreateProjectDialog',
     'InstallFrameworkDialog',
-    'CProjectConfigDialog'
+    'CProjectConfigDialog',
+    'SerialSettingsDialog'
 ]

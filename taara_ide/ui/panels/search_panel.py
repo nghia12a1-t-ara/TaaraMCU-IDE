@@ -455,7 +455,7 @@ class SearchPanel(QWidget):
         
         # Files to exclude
         self._exclude_input = QLineEdit()
-        self._exclude_input.setPlaceholderText("files to exclude (e.g., *test*, build/)")
+        self._exclude_input.setPlaceholderText("files to exclude (e.g., *test*, out/)")
         filters_inputs_layout.addWidget(self._exclude_input)
         
         filters_layout.addWidget(self._filters_inputs)
