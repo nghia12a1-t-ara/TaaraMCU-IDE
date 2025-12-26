@@ -3,7 +3,7 @@ Terminal Panel - Embedded terminal for command execution.
 """
 
 from PyQt6.QtWidgets import (
-    QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QPushButton,
     QLabel, QMessageBox, QMenu, QDialog
 )
@@ -125,13 +125,12 @@ class TerminalWorker(QThread):
             self.command_finished.emit(self.command)
 
 
-class Terminal(QDockWidget):
+class Terminal(QWidget):
     """Integrated Terminal and Serial Monitor."""
-    
+
     def __init__(self, parent: Optional['MainWindow'] = None):
         super().__init__(parent)
         self._parent = parent
-        self.setWindowTitle("Terminal")
         
         self._serial_settings = {
             'port': None,
@@ -196,12 +195,11 @@ class Terminal(QDockWidget):
     
     def _setup_ui(self):
         """Initialize UI components."""
-        self.setObjectName("TerminalDock")
+        self.setObjectName("TerminalWidget")
         self.setMinimumHeight(100)
         self.setMaximumHeight(500)
-        
-        main_widget = QWidget()
-        layout = QVBoxLayout(main_widget)
+
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
         
@@ -267,16 +265,33 @@ class Terminal(QDockWidget):
             }}
         """)
         layout.addWidget(self._input)
-        
-        self.setWidget(main_widget)
     
     def _update_connection_status(self, connected: bool):
         if connected:
-            self._status_label.setText("● Connected")
+            port_name = self._serial_settings.get('port', 'Unknown')
+            baud_rate = self._serial_settings.get('baud_rate', 115200)
+            self._status_label.setText(f"● Connected")
             self._status_label.setStyleSheet("color: #4EC9B0;")  # Green
+
+            # Update dock widget title to show COM port
+            self._update_dock_title(f"Terminal - {port_name} ({baud_rate})")
         else:
             self._status_label.setText("● Disconnected")
             self._status_label.setStyleSheet("color: #808080;")  # Gray
+
+            # Reset dock widget title
+            self._update_dock_title("Terminal")
+
+    def _update_dock_title(self, title: str):
+        """Update the parent dock widget's title."""
+        # Find the parent dock widget and update its title
+        from PyQt6.QtWidgets import QDockWidget
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, QDockWidget):
+                parent.setWindowTitle(title)
+                break
+            parent = parent.parent()
 
     def _create_toolbar(self) -> QWidget:
         """Create compact toolbar with mode on left, settings on right."""
@@ -768,58 +783,39 @@ class Terminal(QDockWidget):
                 return [os.path.join(base_dir, m) for m in matches]
             return matches
 
-    def _on_mode_changed(self, index: int):
-        """Handle mode change between Terminal and Serial Port"""
-        self._serial_mode = (index == 1)  # 1 = Serial Port
-        
-        if hasattr(self, '_path_label'):
-            self._path_label.setVisible(not self._serial_mode)
-        
-        self._serial_settings_widget.setVisible(self._serial_mode)
-        self._filter_widget.setVisible(self._serial_mode)
-        
-        if self._serial_mode:
-            self._refresh_ports()
-            self._input.setPlaceholderText("Type and press Enter to send...")
-        else:
-            self._input.setPlaceholderText("Enter command here...")
-
     def _refresh_ports(self):
         """Refresh the list of available COM ports."""
-        self._port_combo.clear()
+        # Just update the cached ports list - no combo box in new design
+        # Serial port selection happens via settings dialog
         ports = self._serial_manager.get_available_ports()
-        
-        if not ports:
-            self._port_combo.addItem("No COM Port")
-            self._connect_btn.setEnabled(False)
-        else:
-            for port in ports:
-                # Format: "COM3 - USB Serial Port (STMicroelectronics)"
-                display_text = f"{port['name']}"
-                if port['description']:
-                    display_text += f" - {port['description']}"
-                if port['manufacturer'] and port['manufacturer'] != 'Unknown':
-                    display_text += f" ({port['manufacturer']})"
-                
-                self._port_combo.addItem(display_text, port['name'])  # Store actual name in data
-            
+
+        # Enable/disable connect button based on port availability
+        if ports and self._serial_settings.get('port'):
             self._connect_btn.setEnabled(True)
+        else:
+            self._connect_btn.setEnabled(False)
 
     def _toggle_serial_connection(self):
         """Toggle serial port connection."""
         if self._serial_manager.is_connected():
             self._serial_manager.disconnect_port()
         else:
-            if self._port_combo.count() == 0 or self._port_combo.currentText() == "No COM Port":
-                self.append_output_with_color("[Terminal] No COM port available\n", TerminalColors.ERROR)
-                return
-            
-            port_name = self._port_combo.currentData()  # Get stored port name
+            # Get port settings from _serial_settings
+            port_name = self._serial_settings.get('port')
             if not port_name:
-                port_name = self._port_combo.currentText().split(' ')[0]  # Fallback to parsing
-            
-            baud_rate = int(self._baud_combo.currentText())
-            
+                self.add_log("error", "No COM port selected. Please configure serial port settings.")
+                self._show_serial_settings()
+                return
+
+            # Check if port is available
+            available_ports = self._serial_manager.get_available_ports()
+            port_names = [p['name'] for p in available_ports]
+            if port_name not in port_names:
+                self.add_log("error", f"Port {port_name} not available. Please check connection.")
+                return
+
+            baud_rate = self._serial_settings.get('baud_rate', 115200)
+
             if self._serial_manager.connect_port(port_name, baud_rate):
                 self._connect_btn.setText("Disconnect")
                 self._connect_btn.setStyleSheet("""
@@ -831,15 +827,33 @@ class Terminal(QDockWidget):
                         background-color: #E81123;
                     }
                 """)
-                self.append_output_with_color(f"[Terminal] Connected to {port_name} at {baud_rate} baud\n", TerminalColors.SUCCESS)
+                self.add_log("success", f"Connected to {port_name} at {baud_rate} baud")
+                self._update_connection_status(True)
             else:
-                self.append_output_with_color(f"[Terminal] Failed to connect to {port_name}\n", TerminalColors.ERROR)
+                self.add_log("error", f"Failed to connect to {port_name}")
+                self._update_connection_status(False)
     
     def _on_serial_connection_changed(self, is_connected: bool):
         """Handle serial connection status change."""
         if not is_connected:
             self._connect_btn.setText("Connect")
-            self._connect_btn.setStyleSheet("")  # Reset to default style
+            self._connect_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #0E639C;
+                    color: white;
+                    border: none;
+                    border-radius: 3px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #1177BB;
+                }
+                QPushButton:pressed {
+                    background-color: #005A9E;
+                }
+            """)
+            self._update_connection_status(False)
 
     def _compile_git_patterns(self):
         """Compile regex patterns for git output formatting with optimization."""
@@ -1026,10 +1040,6 @@ class Terminal(QDockWidget):
         """Switch terminal to Terminal mode (not Serial mode)."""
         self._mode_btn.setText("Terminal")
         self._switch_mode(False)
-    
-    def focus_input(self):
-        """Focus the command input field."""
-        self._input.setFocus()
 
     def _handle_builtin(self, command: str) -> bool:
         """
@@ -1125,11 +1135,7 @@ Shortcuts:
         self._input.setFocus()
         self.show()
         self.raise_()
-    
-    def set_terminal_mode(self):
-        """Switch terminal to Terminal mode (not Serial Port)"""
-        self._mode_combo.setCurrentIndex(0) # Index 0 = Terminal
-    
+
     def _show_color_config(self):
         """Open color configuration dialog."""
         dialog = TerminalColorConfig(self)
@@ -1378,7 +1384,7 @@ Shortcuts:
         """Update the current path label."""
         if not hasattr(self, '_path_label'):
             return
-            
+
         path = self._current_path or os.getcwd()
         # Shorten path if too long
         display_path = path
@@ -1386,9 +1392,13 @@ Shortcuts:
             parts = path.split(os.sep)
             if len(parts) > 3:
                 display_path = os.sep.join(['...'] + parts[-2:])
-        
+
         self._path_label.setText(f"📁 {display_path}")
         self._path_label.setToolTip(f"Current directory: {path}")
+
+        # Also update the input placeholder text if in terminal mode
+        if not self._serial_mode and hasattr(self, '_input'):
+            self._input.setPlaceholderText(f"{path} >>> Enter command...")
 
     def _execute_input(self):
         """Execute command from input field."""

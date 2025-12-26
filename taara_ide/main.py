@@ -24,7 +24,7 @@ def main():
     app.setOrganizationName("Taara")
     app.setApplicationVersion("1.0.0")
     
-    from PyQt6.QtGui import QFont, QFontDatabase
+    from PyQt6.QtGui import QFont
     default_font = QFont()
     default_font.setStyleHint(QFont.StyleHint.SansSerif)
     default_font.setFamily("Segoe UI")
