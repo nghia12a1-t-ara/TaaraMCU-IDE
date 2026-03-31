@@ -332,27 +332,45 @@ class AutocompleteManager:
         try:
             pos = self.editor.SendScintilla(QsciScintilla.SCI_GETCURRENTPOS)
             is_calltip_active = self.editor.SendScintilla(QsciScintilla.SCI_CALLTIPACTIVE)
-            
+
             if pos > 0:
                 char_before = chr(self.editor.SendScintilla(QsciScintilla.SCI_GETCHARAT, pos - 1))
-                
+
                 if char_before == '(':
-                    # Opening paren - show new call tip
                     func_name = self._get_function_name_before(pos - 1)
                     if func_name:
                         self._show_calltip(func_name, pos)
-                
+
                 elif char_before == ',':
                     if is_calltip_active:
                         self._update_calltip_highlight()
                     else:
                         self._try_restore_calltip(pos)
-                
+
                 elif char_before == ')':
-                    # Closing paren - hide call tip
-                    self.editor.SendScintilla(QsciScintilla.SCI_CALLTIPCANCEL)
-                    self._current_calltip_text = ""
-        
+                    # Only cancel if we've closed the outermost call paren.
+                    # Walk backwards: if we find an unmatched '(' it means the tip
+                    # call is still open (nested paren was closed).
+                    depth = 0
+                    scan = pos - 1
+                    still_inside = False
+                    while scan >= 0:
+                        ch = chr(self.editor.SendScintilla(QsciScintilla.SCI_GETCHARAT, scan))
+                        if ch == ')':
+                            depth += 1
+                        elif ch == '(':
+                            if depth == 0:
+                                still_inside = True
+                                break
+                            depth -= 1
+                        scan -= 1
+
+                    if not still_inside:
+                        self.editor.SendScintilla(QsciScintilla.SCI_CALLTIPCANCEL)
+                        self._current_calltip_text = ""
+                    elif is_calltip_active:
+                        self._update_calltip_highlight()
+
         except Exception as e:
             print(f"[AutocompleteManager] Call tip error: {e}")
     
@@ -373,77 +391,86 @@ class AutocompleteManager:
         return ""
     
     def _show_calltip(self, func_name: str, pos: int):
-        """Show call tip for the given function."""
-        signature = self._get_signature(func_name)
-        
+        """Show call tip for the given function.
+
+        Fast path: built-ins + document extraction show immediately.
+        Slow path: CTags disk scan runs async; calltip appears when ready.
+        """
+        # Fast sources (no I/O)
+        signature = (self.BUILTIN_SIGNATURES.get(func_name) or
+                     self._extract_signature_from_document(func_name))
+
         if signature:
-            formatted = self._format_signature_with_markers(signature)
-            self._current_calltip_text = formatted
-            
-            self.editor.SendScintilla(
-                QsciScintilla.SCI_CALLTIPSHOW,
-                pos,
-                formatted.encode('utf-8')
+            self._display_calltip(signature, pos)
+            return
+
+        # Slow source: CTags — run async so the timer is never blocked
+        ctags = self._get_ctags_handler()
+        if ctags and self.editor.file_path:
+            ctags.find_definition_async(
+                func_name, self.editor.file_path,
+                lambda defn, _fn=func_name, _pos=pos: (
+                    QTimer.singleShot(0, lambda: self._on_ctags_definition(_fn, _pos, defn))
+                )
             )
-            
-            # Highlight first parameter
-            QTimer.singleShot(10, lambda: self._highlight_parameter(0))
-    
-    def _get_signature(self, func_name: str) -> Optional[str]:
-        """Get signature for a function from various sources."""
-        # 1. Check built-in signatures
-        if func_name in self.BUILTIN_SIGNATURES:
-            return self.BUILTIN_SIGNATURES[func_name]
-        
-        # 2. Try CTags
-        signature = self._get_signature_from_ctags(func_name)
-        if signature:
-            return signature
-        
-        # 3. Try document extraction
-        signature = self._extract_signature_from_document(func_name)
-        if signature:
-            return signature
-        
-        return None
-    
-    def _get_signature_from_ctags(self, func_name: str) -> Optional[str]:
-        """Get signature from CTags for custom functions."""
+
+    def _on_ctags_definition(self, func_name: str, pos: int, definition) -> None:
+        """Called on main thread when async CTags lookup completes."""
+        if not definition:
+            return
+        sig = self._extract_signature_from_definition(func_name, definition)
+        if sig:
+            self._display_calltip(sig, pos)
+
+    def _display_calltip(self, signature: str, pos: int) -> None:
+        formatted = self._format_signature_with_markers(signature)
+        self._current_calltip_text = formatted
+        self.editor.SendScintilla(
+            QsciScintilla.SCI_CALLTIPSHOW,
+            pos,
+            formatted.encode('utf-8')
+        )
+        QTimer.singleShot(10, lambda: self._highlight_parameter(0))
+
+    def _get_ctags_handler(self):
+        """Walk up parent chain to find EditorManager's ctags_handler."""
         try:
-            main_window = self.editor._parent
-            while main_window and not hasattr(main_window, '_editor_manager'):
-                main_window = main_window.parent() if hasattr(main_window, 'parent') else None
-            
-            if not main_window or not hasattr(main_window, '_editor_manager'):
-                return None
-            
-            ctags_handler = main_window._editor_manager.ctags_handler
-            current_file = self.editor.file_path
-            
-            if not current_file:
-                return None
-            
-            definition = ctags_handler.find_definition(func_name, current_file)
-            
-            if definition and len(definition) >= 2:
-                file_path, line_num = definition[0], definition[1]
-                
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        lines = f.readlines()
-                        if 0 <= line_num - 1 < len(lines):
-                            func_line = lines[line_num - 1].strip()
-                            
-                            if '(' in func_line and ')' in func_line:
-                                start = func_line.find(func_name)
-                                if start != -1:
-                                    rest = func_line[start:]
-                                    end = rest.find(')') + 1
-                                    return rest[:end]
-                except:
-                    pass
-        except Exception as e:
-            print(f"[AutocompleteManager] CTags lookup failed: {e}")
+            node = self.editor._parent
+            while node:
+                if hasattr(node, '_editor_manager'):
+                    return node._editor_manager.ctags_handler
+                node = node.parent() if callable(getattr(node, 'parent', None)) else None
+        except Exception:
+            pass
+        return None
+
+    def _extract_signature_from_definition(self, func_name: str,
+                                            definition: tuple) -> Optional[str]:
+        """Read one line from disk to extract a function signature."""
+        try:
+            file_path, line_num = definition[0], definition[1]
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as fh:
+                for i, line in enumerate(fh, 1):
+                    if i == line_num:
+                        line = line.strip()
+                        if '(' in line and ')' in line:
+                            start = line.find(func_name)
+                            if start != -1:
+                                rest = line[start:]
+                                depth, end = 0, 0
+                                for j, ch in enumerate(rest):
+                                    if ch == '(':
+                                        depth += 1
+                                    elif ch == ')':
+                                        depth -= 1
+                                        if depth == 0:
+                                            end = j + 1
+                                            break
+                                if end:
+                                    return rest[:end].replace('{', '').replace(';', '').strip()
+                        break
+        except Exception:
+            pass
         return None
     
     def _extract_signature_from_document(self, func_name: str) -> Optional[str]:

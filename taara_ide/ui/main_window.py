@@ -3,40 +3,25 @@ Main application window - refactored version
 """
 import os
 
-from PyQt6.QtWidgets import (
-    QMainWindow, QSplitter, QTabWidget, QDockWidget,
-    QMessageBox, QFileDialog, QWidget,
-    QHBoxLayout, QVBoxLayout, QStackedWidget
-)
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QCloseEvent, QIcon
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import QMainWindow, QMessageBox, QFileDialog, QTabWidget
+from PyQt6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
 
 from taara_ide.ui.actions import ActionManager
 from taara_ide.ui.menu_manager import MenuManager
 from taara_ide.ui.status_bar import StatusBarManager
-from taara_ide.ui.activity_bar import ActivityBar
-from taara_ide.ui.breadcrumb_bar import BreadcrumbBar
+from taara_ide.ui.layout_manager import LayoutManager
 from taara_ide.ui.dialogs import (
     FindDialog, GoToLineDialog, ProjectConfigDialog,
     CtagsPathDialog, CreateProjectDialog, InstallFrameworkDialog,
-    CProjectConfigDialog  # Import C project config dialog
+    CProjectConfigDialog
 )
 from taara_ide.ui.editor.editor_manager import EditorManager
-from taara_ide.ui.panels.project_view import ProjectView
-from taara_ide.ui.panels.function_list import FunctionList
-from taara_ide.ui.panels.terminal import Terminal
-from taara_ide.ui.panels.debugger_panel import DebuggerPanel
-from taara_ide.ui.panels.search_panel import SearchPanel
-from taara_ide.ui.panels.git_panel import GitPanel
-from taara_ide.ui.panels.extensions_panel import ExtensionsPanel
-from taara_ide.ui.panels.debug_sidebar import DebugSidebarPanel
-from taara_ide.ui.controllers import BuildController  # Import BuildController
+from taara_ide.ui.controllers import BuildController
 
 from taara_ide.config import SettingsManager, AppConstants
-from taara_ide.services import ProjectService, BuildService, DebugService
+from taara_ide.services import ProjectService, BuildService, DebugService, LspService
 from taara_ide.utils import resource_path
-from taara_ide.core.compiler.c_project_config import CProjectConfig, CProjectConfigManager  # Import C project config classes
+from taara_ide.core.compiler.c_project_config import CProjectConfigManager
 
 class MainWindow(QMainWindow):
     """
@@ -58,34 +43,54 @@ class MainWindow(QMainWindow):
         self._project_service = ProjectService(self)
         self._build_service = BuildService(self._project_service, self)
         self._debug_service = DebugService(self._project_service, self)
+        self._lsp_service = LspService(self)
         
         # Initialize UI managers
         self._actions = ActionManager(self)
         self._menu_manager = MenuManager(self, self._actions)
         
-        # UI components (will be set up later)
-        self._project_view = None
-        self._function_list = None
-        self._terminal = None
-        self._terminal_dock = None # Add _terminal_dock declaration
-        self._debugger_panel = None
-        self._debugger_dock = None  # Add _debugger_dock variable declaration
-        self._activity_bar = None
-        self._search_panel = None
-        self._git_panel = None
-        self._extensions_panel = None
-        self._debug_sidebar = None
-        self._sidebar_stack = None
-        self._center_splitter = None
-        self._right_panel = None
-        self._breadcrumb_bar = None
-        
-        self._saved_sidebar_width = 250  # Default sidebar width
-        self._saved_right_panel_width = 200  # Default function list width
-        
+        self._saved_sidebar_width = 250
+        self._saved_right_panel_width = 200
+
         self._setup_window()
-        self._setup_ui()
-        
+
+        # Menus / toolbar / status bar (must happen before layout)
+        self._menu_manager.setup_menus()
+        self._menu_manager.setup_toolbar()
+        self._status_manager = StatusBarManager(self.statusBar())
+
+        # Build the entire widget tree via LayoutManager
+        self._layout = LayoutManager()
+        self._layout.build(self, self._settings_manager, self._debug_service)
+
+        # Assign widget references from layout
+        self._activity_bar    = self._layout.activity_bar
+        self._sidebar_stack   = self._layout.sidebar_stack
+        self._project_view    = self._layout.project_view
+        self._search_panel    = self._layout.search_panel
+        self._git_panel       = self._layout.git_panel
+        self._debug_sidebar   = self._layout.debug_sidebar
+        self._extensions_panel = self._layout.extensions_panel
+        self._main_splitter   = self._layout.main_splitter
+        self._center_splitter = self._layout.center_splitter
+        self._tab_widget      = self._layout.tab_widget
+        self._breadcrumb_bar  = self._layout.breadcrumb_bar
+        self._right_panel     = self._layout.right_panel
+        self._function_list   = self._layout.function_list
+        self._terminal        = self._layout.terminal
+        self._terminal_dock   = self._layout.terminal_dock
+        self._debugger_panel  = self._layout.debugger_panel
+        self._debugger_dock   = self._layout.debugger_dock
+
+        # Wire signals that need MainWindow handlers
+        self._activity_bar.panel_changed.connect(self._on_activity_panel_changed)
+        self._search_panel.file_requested.connect(self._on_search_file_requested)
+        self._search_panel.search_term_changed.connect(self._on_search_term_changed)
+        self._breadcrumb_bar.symbol_clicked.connect(self._on_breadcrumb_symbol_clicked)
+        self._breadcrumb_bar.file_open_requested.connect(self._on_breadcrumb_file_requested)
+        self._actions.set_checked("view.function_list",
+                                  self._settings_manager.get_right_panel_width() != 0)
+
         self._editor_manager = EditorManager(self, self._tab_widget)
         self._connect_editor_manager()
         self._setup_shortcuts()
@@ -122,199 +127,36 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 768)
         self.setWindowIcon(QIcon(resource_path("icons/logoIcon.ico")))
     
-    def _setup_ui(self) -> None:
-        """Set up the main UI layout"""
-        # Create menus and toolbar
-        self._menu_manager.setup_menus()
-        self._menu_manager.setup_toolbar()
-        
-        # Create status bar
-        self._status_manager = StatusBarManager(self.statusBar())
-        
-        # Main container widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        # Activity Bar (left toolbar)
-        self._activity_bar = ActivityBar(self)
-        self._activity_bar.panel_changed.connect(self._on_activity_panel_changed)
-        main_layout.addWidget(self._activity_bar)
-        
-        # Main splitter (sidebar + editor area)
-        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(self._main_splitter)
-        
-        # Sidebar with stacked panels
-        self._sidebar_stack = QStackedWidget()
-        self._sidebar_stack.setMinimumWidth(200)
-        self._sidebar_stack.setMaximumWidth(400)
-        self._main_splitter.addWidget(self._sidebar_stack)
-        
-        # Project panel (index 0) - contains only project view
-        self._project_panel = QWidget()
-        project_layout = QVBoxLayout(self._project_panel)
-        project_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self._project_view = ProjectView(self)
-        self._project_view.setTitleBarWidget(QWidget())
-        self._project_view.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        project_layout.addWidget(self._project_view)
-        
-        self._sidebar_stack.addWidget(self._project_panel)  # Index 0: Project
-        
-        # Search panel (index 1)
-        self._search_panel = SearchPanel(self)
-        self._search_panel.file_requested.connect(self._on_search_file_requested)
-        self._search_panel.search_term_changed.connect(self._on_search_term_changed)
-        self._sidebar_stack.addWidget(self._search_panel)  # Index 1: Search
-        
-        # Git panel (index 2)
-        self._git_panel = GitPanel(self)
-        self._sidebar_stack.addWidget(self._git_panel)  # Index 2: Git
-        
-        # Debug sidebar (index 3)
-        self._debug_sidebar = DebugSidebarPanel(self)
-        self._sidebar_stack.addWidget(self._debug_sidebar)  # Index 3: Debug
-        
-        # Extensions panel (index 4)
-        self._extensions_panel = ExtensionsPanel(self)
-        self._sidebar_stack.addWidget(self._extensions_panel)  # Index 4: Extensions
-        
-        self._center_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._main_splitter.addWidget(self._center_splitter)
-        
-        editor_area = QWidget()
-        editor_layout = QVBoxLayout(editor_area)
-        editor_layout.setContentsMargins(0, 0, 0, 0)
-        editor_layout.setSpacing(0)
-        
-        # Breadcrumb bar
-        self._breadcrumb_bar = BreadcrumbBar(self)
-        self._breadcrumb_bar.symbol_clicked.connect(self._on_breadcrumb_symbol_clicked)
-        self._breadcrumb_bar.file_open_requested.connect(self._on_breadcrumb_file_requested)
-        editor_layout.addWidget(self._breadcrumb_bar)
-        
-        # Center (editor area)
-        self._tab_widget = QTabWidget()
-        self._tab_widget.setTabsClosable(True)
-        self._tab_widget.setMovable(True)
-        editor_layout.addWidget(self._tab_widget)
-        
-        self._center_splitter.addWidget(editor_area)
-        
-        self._tab_widget. tabBar().setStyleSheet("""
-            QTabBar::tab {
-                background: #d8dded;
-                padding: 7px 16px;
-                border: 1px solid #111;
-                border-bottom: none;
-            }
-            QTabBar::tab:selected {
-                background: #e9edd8;
-                font-weight: bold;
-                border: 1px solid #0259bf;
-            }
-            QTabBar::tab:hover {
-                background: #cfd6b2;
-            }
-            QTabBar::tab:selected:!active {
-                background: #2a2a2a;
-            }
-        """)
-        
-
-        self._right_panel = QWidget()
-        right_layout = QVBoxLayout(self._right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self._function_list = FunctionList(self)
-        right_layout.addWidget(self._function_list)
-        
-        self._center_splitter.addWidget(self._right_panel)
-        
-        right_panel_visible = self._settings_manager.get_right_panel_width() != 0
-        self._right_panel.setVisible(right_panel_visible)
-        self._actions.set_checked("view.function_list", right_panel_visible)
-        
-        # Create dock widgets
-        self._setup_dock_widgets()
-
-        # Set splitter sizes
-        self._main_splitter.setSizes([250, 750])
-        if right_panel_visible:
-            self._center_splitter.setSizes([600, 300])
-        else:
-            self._center_splitter.setSizes([800, 0])
-    
     def _on_activity_panel_changed(self, panel_id: str):
         """Handle activity bar panel change"""
+        from taara_ide.ui.activity_bar import ActivityBar as _AB
         if not panel_id:
-            # Hide sidebar
             self._sidebar_stack.hide()
             return
-        
         self._sidebar_stack.show()
-        
-        # Map panel_id to stack index
         panel_map = {
-            ActivityBar.PANEL_PROJECT: 0,
-            ActivityBar.PANEL_SEARCH: 1,
-            ActivityBar.PANEL_GIT: 2,
-            ActivityBar.PANEL_DEBUG: 3,
-            ActivityBar.PANEL_EXTENSIONS: 4,
+            _AB.PANEL_PROJECT: 0,
+            _AB.PANEL_SEARCH: 1,
+            _AB.PANEL_GIT: 2,
+            _AB.PANEL_DEBUG: 3,
+            _AB.PANEL_EXTENSIONS: 4,
         }
-        
-        index = panel_map.get(panel_id, 0)
-        self._sidebar_stack.setCurrentIndex(index)
-    
+        self._sidebar_stack.setCurrentIndex(panel_map.get(panel_id, 0))
+
     def _on_search_file_requested(self, file_path: str, line_num: int):
         """Handle search result double click"""
         if hasattr(self, '_editor_manager'):
             self._editor_manager.open_file_at_line(file_path, line_num, 0)
-    
+
     def _on_search_term_changed(self, term: str, case_sensitive: bool, whole_word: bool, use_regex: bool):
         """Highlight search matches in current editor"""
         editor = self._editor_manager.get_current_editor()
         if editor:
             editor.highlight_search_matches(term, case_sensitive, whole_word, use_regex)
-        
-        # Store current search params for when switching tabs
         self._current_search_term = term
         self._current_search_case = case_sensitive
         self._current_search_word = whole_word
         self._current_search_regex = use_regex
-    
-    def _setup_dock_widgets(self) -> None:
-        """Set up dock widgets for panels"""
-        self._terminal = Terminal(self)
-        self._terminal_dock = QDockWidget("Terminal", self) # Add _terminal_dock
-        self._terminal_dock.setObjectName("TerminalDock")
-        self._terminal_dock.setWidget(self._terminal)
-        self._terminal_dock.setAllowedAreas(
-            Qt.DockWidgetArea.BottomDockWidgetArea | 
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._terminal_dock)
-        self._terminal_dock.hide() # Initially hide the dock
-        
-        self._debugger_dock = QDockWidget("Debugger", self)
-        self._debugger_dock.setObjectName("DebuggerDock")
-        self._debugger_panel = DebuggerPanel(self._debug_service, self)
-        self._debugger_dock.setWidget(self._debugger_panel)
-        self._debugger_dock.setAllowedAreas(
-            Qt.DockWidgetArea.BottomDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._debugger_dock)
-        self._debugger_dock.hide()
-    
-    def _toggle_dock(self, dock: QDockWidget) -> None:
-        """Toggle dock widget visibility"""
-        dock.setVisible(not dock.isVisible())
     
     def _connect_editor_manager(self) -> None:
         """Connect EditorManager signals"""
@@ -365,9 +207,8 @@ class MainWindow(QMainWindow):
         # Update status bar
         self.update_status_bar()
         
-        # Update function list if available
-        if self._function_list and file_path:
-            self._editor_manager.ctags_handler.index_file_async(file_path)
+        # Function list is updated via symbols_updated signal from ctags_handler
+        # (already triggered by editor_manager on open/save — no duplicate call needed)
         
         if hasattr(self, '_current_search_term') and self._current_search_term:
             editor.highlight_search_matches(
@@ -376,6 +217,12 @@ class MainWindow(QMainWindow):
                 getattr(self, '_current_search_word', False),
                 getattr(self, '_current_search_regex', False)
             )
+
+        # Propagate "show all chars" state to newly created editors
+        if getattr(self, '_show_all_chars', False):
+            from PyQt6.Qsci import QsciScintilla
+            editor.setWhitespaceVisibility(QsciScintilla.WhitespaceVisibility.WsVisible)
+            editor.setEolVisibility(True)
     
     def _on_file_opened(self, file_path: str) -> None:
         """Handle file opened"""
@@ -470,7 +317,7 @@ class MainWindow(QMainWindow):
         
         # Build service signals
         self._build_service.build_progress.connect(
-            lambda msg, pct: self._status_manager.set_message(f"Building: {msg}")
+            lambda msg, _pct: self._status_manager.set_message(f"Building: {msg}")
         )
         # Note: build_output and build_finished now handled by BuildController
     
@@ -504,16 +351,21 @@ class MainWindow(QMainWindow):
             if self._search_panel:
                 self._search_panel.set_project_path(directory)
             
-            # Index folder with CTags for code navigation
+            # Index folder with CTags for code navigation (runs in background)
             if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
-                self._editor_manager.ctags_handler.index_project(directory)
+                self._status_manager.set_message("Indexing project…")
+                ch = self._editor_manager.ctags_handler
+                ch.indexing_finished.connect(self._on_project_index_done)
+                ch.index_project(directory)
             
             # Save as last opened folder
             self._settings_manager.set_last_project(directory)
-            
+
             # Update window title
             folder_name = os.path.basename(directory)
             self.setWindowTitle(f"{folder_name} - {AppConstants.APP_NAME} - {AppConstants.VERSION}")
+
+            self._start_lsp(directory)
 
     # ========== Edit Operations ==========
     
@@ -607,19 +459,36 @@ class MainWindow(QMainWindow):
     
     # ========== Project Events ==========
     
+    def _start_lsp(self, root_path: str) -> None:
+        """Start (or restart) clangd for the given root."""
+        clangd_exe = self._settings_manager.value("clangd/path", "clangd")
+        if self._lsp_service.start(root_path, clangd_exe):
+            self._lsp_service.started.connect(
+                lambda: self._status_manager.set_message("clangd ready", 3000)
+            )
+            # Attach LSP to all currently open editors
+            for editor in self._editor_manager.editors:
+                editor.lsp_client.attach(self._lsp_service)
+            # Also attach to future editors
+            self._editor_manager.editor_created.connect(
+                lambda ed: ed.lsp_client.attach(self._lsp_service)
+            )
+
     def _on_project_opened(self, path: str) -> None:
         """Handle project opened"""
         self.setWindowTitle(
             f"{self._project_service.name} - {AppConstants.APP_NAME}"
         )
         self._status_manager.set_message(f"Opened project: {path}")
-        
+
         # Update project view
         if self._project_view:
             self._project_view.set_project_directory(path)
-        
+
         if self._search_panel:
             self._search_panel.set_project_path(path)
+
+        self._start_lsp(path)
     
     def _on_project_closed(self) -> None:
         """Handle project closed"""
@@ -824,7 +693,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_editor_manager') and hasattr(self._editor_manager, 'ctags_handler'):
             print("[main_window] Cleaning up all CTags files...")
             self._editor_manager.ctags_handler.cleanup_all_tags()
-        
+
+        if self._lsp_service.is_running():
+            self._lsp_service.stop()
+
         self._save_state()
         
         # Close project
@@ -850,18 +722,37 @@ class MainWindow(QMainWindow):
             self._actions.set_checked("view.word_wrap", is_wrapped)
     
     def _toggle_whitespace(self, checked: bool = None) -> None:
-        """Toggle whitespace visibility for current editor"""
-        editor = self._editor_manager.get_current_editor()
-        if editor:
-            from PyQt6.Qsci import QsciScintilla
-            if checked is not None:
-                ws_mode = QsciScintilla.WhitespaceVisibility.WsVisible if checked else QsciScintilla.WhitespaceVisibility.WsInvisible
+        """Toggle whitespace/EOL visibility for all open editors.
+
+        When enabled:
+          - Spaces shown as middle dots (·)
+          - Tabs shown as long arrows (→) with a tinted background
+          - EOL markers shown (↵ / ¶)
+        Mirrors VS Code / Notepad++ "Show All Characters" behaviour.
+        """
+        from PyQt6.Qsci import QsciScintilla
+
+        if checked is None:
+            # Derive from current editor state
+            editor = self._editor_manager.get_current_editor()
+            if editor:
+                checked = editor.whitespaceVisibility() == QsciScintilla.WhitespaceVisibility.WsInvisible
             else:
-                current_mode = editor.whitespaceVisibility()
-                ws_mode = QsciScintilla.WhitespaceVisibility.WsInvisible if current_mode == QsciScintilla.WhitespaceVisibility.WsVisible else QsciScintilla.WhitespaceVisibility.WsVisible
+                checked = False
+
+        ws_mode = (QsciScintilla.WhitespaceVisibility.WsVisible
+                   if checked else
+                   QsciScintilla.WhitespaceVisibility.WsInvisible)
+
+        # Apply to every open editor so switching tabs stays consistent
+        for editor in self._editor_manager.editors:
             editor.setWhitespaceVisibility(ws_mode)
-            is_visible = ws_mode == QsciScintilla.WhitespaceVisibility.WsVisible
-            self._actions.set_checked("view.show_all_chars", is_visible)
+            editor.setEolVisibility(checked)   # show ↵ / ¶ markers
+
+        # Remember for editors opened later
+        self._show_all_chars = checked
+
+        self._actions.set_checked("view.show_all_chars", checked)
     
     def _toggle_project_panel(self, checked: bool = None) -> None:
         """Toggle project panel visibility"""
@@ -963,14 +854,24 @@ class MainWindow(QMainWindow):
     
     # ========== CTags Indexing Handler ==========
     
-    def _on_index_requested(self, directory: str) -> None:
-        """Handle project indexing request from ProjectView"""
-        self._status_manager.set_message(f"Indexing project: {directory}...")
-        success = self._editor_manager.ctags_handler.index_project(directory)
+    def _on_project_index_done(self, success: bool) -> None:
+        """Handle async project indexing completion."""
         if success:
-            self._status_manager.set_message(f"Project indexed successfully", 3000)
+            self._status_manager.set_message("Project indexed successfully", 3000)
         else:
-            self._status_manager.set_message(f"Failed to index project", 3000)
+            self._status_manager.set_message("CTags indexing failed — check CTags path in Settings", 5000)
+        # Disconnect to avoid repeated calls on future indexing_finished signals
+        try:
+            self._editor_manager.ctags_handler.indexing_finished.disconnect(self._on_project_index_done)
+        except RuntimeError:
+            pass
+
+    def _on_index_requested(self, directory: str) -> None:
+        """Handle project indexing request from ProjectView (runs in background)."""
+        self._status_manager.set_message(f"Indexing {os.path.basename(directory)}…")
+        ch = self._editor_manager.ctags_handler
+        ch.indexing_finished.connect(self._on_project_index_done)
+        ch.index_project(directory)
     
     # ========== Breadcrumb Bar Handler ==========
     

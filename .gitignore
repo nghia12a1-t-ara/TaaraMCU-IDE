@@ -2,6 +2,8 @@
 # Taara IDE - Git Ignore
 # ============================================
 
+.claude/
+
 # ---------- Python ----------
 *.py[cod]
 *$py.class

@@ -5,5 +5,6 @@ Services contain business logic and orchestrate core components.
 from taara_ide.services.project_service import ProjectService, ProjectConfig
 from taara_ide.services.build_service import BuildService
 from taara_ide.services.debug_service import DebugService
+from taara_ide.services.lsp_service import LspService
 
-__all__ = ['ProjectService', 'ProjectConfig', 'BuildService', 'DebugService']
+__all__ = ['ProjectService', 'ProjectConfig', 'BuildService', 'DebugService', 'LspService']

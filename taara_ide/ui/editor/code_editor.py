@@ -13,6 +13,7 @@ import os
 from typing import Optional, TYPE_CHECKING
 from taara_ide.utils.resource import resource_path
 from taara_ide.ui.editor.autocomplete_manager import AutocompleteManager
+from taara_ide.ui.editor.lsp_client import LspClient
 
 if TYPE_CHECKING:
     from taara_ide.ui.main_window import MainWindow
@@ -68,6 +69,7 @@ class CodeEditor(QsciScintilla):
         
         self.autocomplete_manager = AutocompleteManager(self)
         self.autocomplete_manager.setup_apis(self.lexer)
+        self.lsp_client = LspClient(self)
         
         # Now set the lexer (with APIs already configured)
         self.setLexer(self.lexer)
@@ -135,20 +137,32 @@ class CodeEditor(QsciScintilla):
         self.setMarginsForegroundColor(QColor("#2B2B2B"))
         self.setMarginsBackgroundColor(QColor("#D3CBB7"))
         self.setMarginsFont(self.margin_font)
-        
+
+        # Fold margin (margin 2)
+        self.setMarginType(2, QsciScintilla.MarginType.SymbolMargin)
+        self.setMarginWidth(2, 14)
+        self.setMarginSensitivity(2, True)
+        self.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle, 2)
+        self.marginClicked.connect(self._on_margin_clicked)
+
         # Separator margin
         self.setMarginType(1, QsciScintilla.MarginType.SymbolMargin)
-        self.setMarginWidth(1, 10)
+        self.setMarginWidth(1, 6)
     
+    def _on_margin_clicked(self, margin: int, line: int, _state):
+        """Toggle fold when fold margin is clicked."""
+        if margin == 2:
+            self.foldLine(line)
+
     def _setup_editing(self):
         """Setup editing features."""
         # Current line highlighting
         self.setCaretLineVisible(True)
-        
+
         # Tab and indentation
         self.setIndentationsUseTabs(False)
         self.setTabWidth(4)
-        
+
         self.setBraceMatching(QsciScintilla.BraceMatch.SloppyBraceMatch)
         
         # Auto-indentation
@@ -345,15 +359,23 @@ class CodeEditor(QsciScintilla):
         self.setIndentationGuidesBackgroundColor(QColor(indent_color))
         self.setIndentationGuidesForegroundColor(QColor(indent_color))
         
-        # Whitespace color
+        # Whitespace / tab rendering
+        # Spaces → small dots (·), Tabs → long arrows (→)
+        # Shape alone distinguishes them; no background tinting (that colorizes all cells).
         ws_color = colors.get("editorWhitespace.foreground", "#586E7580")
         self.setWhitespaceForegroundColor(QColor(ws_color))
+        self.setTabDrawMode(QsciScintilla.TabDrawMode.TabLongArrow)
         
         # Brace matching
-        self.setMatchedBraceBackgroundColor(QColor("#3E3E3E"))  # Dark background
-        self.setMatchedBraceForegroundColor(QColor("#FF0000"))  # Red foreground like VSCode
-        self.setUnmatchedBraceBackgroundColor(QColor("#FF0000"))  # Red background for unmatched
-        self.setUnmatchedBraceForegroundColor(QColor("#FFFFFF"))  # White text for unmatched
+        self.setMatchedBraceBackgroundColor(QColor("#3E3E3E"))
+        self.setMatchedBraceForegroundColor(QColor("#FF0000"))
+        self.setUnmatchedBraceBackgroundColor(QColor("#FF0000"))
+        self.setUnmatchedBraceForegroundColor(QColor("#FFFFFF"))
+
+        # Fold margin colors
+        fold_bg = QColor(colors.get("editorGroupHeader.tabsBackground", "#D3CBB7"))
+        fold_fg = QColor(colors.get("editorLineNumber.foreground", "#2B2B2B"))
+        self.setFoldMarginColors(fold_fg, fold_bg)
     
     def set_language(self, language: str):
         """Change syntax highlighting language."""
@@ -538,17 +560,22 @@ class CodeEditor(QsciScintilla):
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
             
+            # Notify LSP of previous file closing
+            if self.file_path and self.file_path != file_path:
+                self.lsp_client.notify_file_closed(self.file_path)
+
             self.setText(content)
             self.file_path = file_path
             self.setModified(False)
-            
+
             # Set language based on extension
             ext = os.path.splitext(file_path)[1].lower()
             if ext in ['.py', '.pyw']:
                 self.set_language("Python")
             elif ext in ['.c', '.h', '.cpp', '.hpp', '.cc', '.cxx']:
                 self.set_language("CPP")
-            
+
+            self.lsp_client.notify_file_opened(file_path, content)
             return True
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not open file: {e}")
