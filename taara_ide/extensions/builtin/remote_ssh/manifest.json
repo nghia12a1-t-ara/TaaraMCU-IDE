@@ -1,0 +1,11 @@
+{
+    "id": "remote-ssh",
+    "name": "Remote SSH",
+    "version": "1.0.0",
+    "description": "Open any folder on a remote machine via SSH. Edit files locally, build and run commands on the remote host.",
+    "author": "TaaraIDE",
+    "category": "remote",
+    "minIdeVersion": "1.0.0",
+    "homepage": "",
+    "dependencies": []
+}

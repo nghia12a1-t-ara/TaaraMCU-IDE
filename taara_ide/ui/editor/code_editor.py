@@ -183,13 +183,20 @@ class CodeEditor(QsciScintilla):
         self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, self.highlight_indicator)
         self.setIndicatorDrawUnder(True, self.highlight_indicator)
         # self.setIndicatorForegroundColor(QColor("#264F78"), self.highlight_indicator)
-        
+
         self.search_indicator = 1
         self.indicatorDefine(QsciScintilla.IndicatorStyle.StraightBoxIndicator, self.search_indicator)
         self.setIndicatorDrawUnder(True, self.search_indicator)
         self.setIndicatorForegroundColor(QColor("#FFA500"), self.search_indicator)  # Orange color
         self.setIndicatorOutlineColor(QColor("#FF8C00"), self.search_indicator)  # Dark orange outline
-        
+
+        # Indicator 2 — inactive preprocessor branches (dim text foreground, VS Code style)
+        self.inactive_indicator = 2
+        self.SendScintilla(QsciScintilla.SCI_INDICSETSTYLE,
+                           self.inactive_indicator, QsciScintilla.INDIC_TEXTFORE)
+        self.SendScintilla(QsciScintilla.SCI_INDICSETFORE,
+                           self.inactive_indicator, self._inactive_dim_color())
+
         # Hotspot for Ctrl+Click
         HOTSPOT_STYLE = 10
         self.SendScintilla(QsciScintilla.SCI_STYLESETHOTSPOT, HOTSPOT_STYLE, True)
@@ -211,6 +218,12 @@ class CodeEditor(QsciScintilla):
         self.update_timer.timeout.connect(self._deferred_update)
         self.cursorPositionChanged.connect(self._schedule_update)
         self.textChanged.connect(self._schedule_update)
+
+        # Inactive preprocessor regions — debounced on text change
+        self._inactive_timer = QTimer(self)
+        self._inactive_timer.setSingleShot(True)
+        self._inactive_timer.timeout.connect(self._update_inactive_regions)
+        self.textChanged.connect(lambda: self._inactive_timer.start(300))
     
     def _schedule_update(self):
         """Schedule deferred update."""
@@ -376,6 +389,11 @@ class CodeEditor(QsciScintilla):
         fold_bg = QColor(colors.get("editorGroupHeader.tabsBackground", "#D3CBB7"))
         fold_fg = QColor(colors.get("editorLineNumber.foreground", "#2B2B2B"))
         self.setFoldMarginColors(fold_fg, fold_bg)
+
+        # Refresh inactive-region indicator colour to match new theme
+        if hasattr(self, 'inactive_indicator'):
+            self.SendScintilla(QsciScintilla.SCI_INDICSETFORE,
+                               self.inactive_indicator, self._inactive_dim_color())
     
     def set_language(self, language: str):
         """Change syntax highlighting language."""
@@ -457,6 +475,138 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(QsciScintilla.SCI_REPLACETARGET, 
                           len(new_text_bytes), new_text_bytes)
     
+    def _inactive_dim_color(self) -> int:
+        """
+        Return the dim text colour for inactive preprocessor regions as a
+        packed BGR int (Scintilla's native format).
+        Derived from the theme background + foreground midpoint, like VS Code.
+        """
+        if self.theme:
+            colors = self.theme.get("colors", {})
+            bg_hex = colors.get("editor.background", "#D7D7AF")
+            fg_hex = colors.get("editor.foreground", "#5F5F00")
+            bg = QColor(bg_hex)
+            fg = QColor(fg_hex)
+            # Blend: 70% background, 30% foreground  → muted text
+            r = int(bg.red()   * 0.70 + fg.red()   * 0.30)
+            g = int(bg.green() * 0.70 + fg.green() * 0.30)
+            b = int(bg.blue()  * 0.70 + fg.blue()  * 0.30)
+        else:
+            r, g, b = 160, 160, 140
+        # Scintilla wants BGR packed as int
+        return (b << 16) | (g << 8) | r
+
+    # ------------------------------------------------------------------
+    # Inactive preprocessor branch dimming
+    # ------------------------------------------------------------------
+
+    def _update_inactive_regions(self):
+        """
+        Grey-out inactive #ifdef / #if 0 / #ifndef branches.
+
+        Strategy (without a real preprocessor):
+          • #if 0  …  (#else … ) #endif  → first block is inactive
+          • #ifdef SYMBOL … #else … #endif  → assume SYMBOL is NOT defined,
+            so the first block is inactive and the #else block is active.
+          • #ifndef SYMBOL … #else … #endif  → assume SYMBOL is NOT defined,
+            so the first block is active and the #else block is inactive.
+          • Nested blocks are handled by a stack.
+
+        Only C/C++ files are processed.
+        """
+        if not isinstance(self.lexer, QsciLexerCPP):
+            return
+
+        text = self.text()
+        lines = text.splitlines()
+        total_bytes = len(self.text().encode("utf-8"))
+
+        # Clear existing inactive indicator
+        self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.inactive_indicator)
+        self.SendScintilla(self.SCI_INDICATORCLEARRANGE, 0, total_bytes)
+
+        # Collect inactive line ranges --------------------------------
+        import re
+        inactive_ranges: list[tuple[int, int]] = []   # (start_line, end_line) inclusive
+
+        # Stack entries: (directive, inactive_so_far, else_seen)
+        #   directive  : "if0" | "ifdef" | "ifndef" | "if"
+        #   first_inactive : bool — is the if-block inactive?
+        #   in_else    : bool — currently inside #else/#elif
+        stack: list[tuple[str, bool, bool]] = []
+
+        # Tracks the start line of the current inactive segment
+        inactive_start: list[int | None] = [None]   # mutable via list
+
+        def _begin_inactive(line_idx: int):
+            if inactive_start[0] is None:
+                inactive_start[0] = line_idx
+
+        def _end_inactive(end_line: int):
+            if inactive_start[0] is not None:
+                inactive_ranges.append((inactive_start[0], end_line))
+                inactive_start[0] = None
+
+        _pp = re.compile(
+            r'^\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b\s*(.*)', re.IGNORECASE
+        )
+
+        for i, line in enumerate(lines):
+            m = _pp.match(line)
+            if not m:
+                continue
+            directive = m.group(1).lower()
+            rest = m.group(2).strip()
+
+            if directive == "ifdef":
+                # Assume symbol NOT defined → first block inactive
+                stack.append(("ifdef", True, False))
+                _begin_inactive(i + 1)          # content starts after #ifdef line
+
+            elif directive == "ifndef":
+                # Assume symbol NOT defined → first block active
+                stack.append(("ifndef", False, False))
+
+            elif directive == "if":
+                if rest == "0":
+                    stack.append(("if0", True, False))
+                    _begin_inactive(i + 1)      # content starts after #if 0 line
+                elif rest == "1":
+                    stack.append(("if1", False, False))
+                else:
+                    # Unknown condition — treat as active (don't dim unknown macros)
+                    stack.append(("if", False, False))
+
+            elif directive in ("else", "elif") and stack:
+                kind, first_inactive, in_else = stack[-1]
+                if not in_else:
+                    stack[-1] = (kind, first_inactive, True)
+                    if first_inactive:
+                        # We were in the inactive first-block → end before #else, else-block is active
+                        _end_inactive(i - 1)
+                    else:
+                        # First block was active → else-block is inactive (starts after #else)
+                        _begin_inactive(i + 1)
+
+            elif directive == "endif" and stack:
+                kind, first_inactive, in_else = stack.pop()
+                if in_else:
+                    if not first_inactive:
+                        # Else-block was inactive → end before #endif
+                        _end_inactive(i - 1)
+                else:
+                    if first_inactive:
+                        # No #else → inactive block ends before #endif
+                        _end_inactive(i - 1)
+
+        # Apply indicator to collected ranges -------------------------
+        for (start_line, end_line) in inactive_ranges:
+            start_pos = self.SendScintilla(self.SCI_POSITIONFROMLINE, start_line)
+            end_pos   = self.SendScintilla(self.SCI_GETLINEENDPOSITION, end_line)
+            if end_pos > start_pos:
+                self.SendScintilla(self.SCI_INDICATORFILLRANGE,
+                                   start_pos, end_pos - start_pos)
+
     def _highlight_current_word(self):
         """Highlight all occurrences of current word."""
         self.SendScintilla(self.SCI_SETINDICATORCURRENT, self.highlight_indicator)
@@ -576,6 +726,7 @@ class CodeEditor(QsciScintilla):
                 self.set_language("CPP")
 
             self.lsp_client.notify_file_opened(file_path, content)
+            QTimer.singleShot(50, self._update_inactive_regions)
             return True
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not open file: {e}")

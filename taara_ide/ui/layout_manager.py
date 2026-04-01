@@ -84,13 +84,14 @@ class LayoutManager:
         self.sidebar_stack.setMaximumWidth(400)
 
         # Index 0 – Project explorer
+        # ProjectView is expensive to construct (first Qt widget init ~600ms).
+        # Use a lightweight placeholder; the real widget is swapped in lazily
+        # after the window is shown via LayoutManager.finish_deferred(window).
         self.project_panel = QWidget()
         _pl = QVBoxLayout(self.project_panel)
         _pl.setContentsMargins(0, 0, 0, 0)
-        self.project_view = ProjectView(window)
-        self.project_view.setTitleBarWidget(QWidget())
-        self.project_view.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        _pl.addWidget(self.project_view)
+        self.project_view = None          # filled by finish_deferred()
+        self._project_panel_layout = _pl  # kept for deferred swap
         self.sidebar_stack.addWidget(self.project_panel)
 
         # Index 1 – Search
@@ -179,3 +180,14 @@ class LayoutManager:
         )
         window.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.debugger_dock)
         self.debugger_dock.hide()
+
+    def finish_deferred(self, window) -> None:
+        """
+        Build widgets that were deferred to keep initial startup fast.
+        Call this via QTimer.singleShot(0, ...) after window.show().
+        """
+        from PyQt6.QtWidgets import QDockWidget
+        self.project_view = ProjectView(window)
+        self.project_view.setTitleBarWidget(QWidget())
+        self.project_view.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self._project_panel_layout.addWidget(self.project_view)

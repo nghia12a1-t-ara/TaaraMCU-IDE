@@ -40,8 +40,8 @@ class ProjectView(QDockWidget):
         self._clipboard_path: Optional[str] = None
         self._clipboard_is_cut: bool = False
         
+        self._context_menu = None   # built lazily on first right-click
         self._setup_ui()
-        self._setup_context_menu()
         self._connect_signals()
     
     def _setup_ui(self):
@@ -114,17 +114,15 @@ class ProjectView(QDockWidget):
         toolbar_layout.addStretch()
         layout.addWidget(toolbar)
         
-        # Create file system model
+        # Create file system model — do NOT call setRootPath(QDir.rootPath())
+        # at init; that triggers a full filesystem scan and costs ~600ms.
+        # The real root is set lazily in set_project_directory().
         self._model = QFileSystemModel()
-        self._model.setRootPath(QDir.rootPath())
         self._model.setFilter(
-            QDir.Filter.NoDotAndDotDot | 
-            QDir.Filter.Files | 
+            QDir.Filter.NoDotAndDotDot |
+            QDir.Filter.Files |
             QDir.Filter.Dirs
         )
-        
-        # Show all files, don't use name filter to disable any
-        # Previously this was causing non-code files to be unselectable
         self._model.setNameFilterDisables(False)
         
         # Setup and configure the tree view
@@ -304,6 +302,8 @@ class ProjectView(QDockWidget):
     
     def _on_context_menu(self, position):
         """Show context menu at position."""
+        if self._context_menu is None:
+            self._setup_context_menu()
         index = self._tree.indexAt(position)
         selected_path = self._model.filePath(index) if index.isValid() else None
         

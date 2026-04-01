@@ -10,18 +10,13 @@ from taara_ide.ui.actions import ActionManager
 from taara_ide.ui.menu_manager import MenuManager
 from taara_ide.ui.status_bar import StatusBarManager
 from taara_ide.ui.layout_manager import LayoutManager
-from taara_ide.ui.dialogs import (
-    FindDialog, GoToLineDialog, ProjectConfigDialog,
-    CtagsPathDialog, CreateProjectDialog, InstallFrameworkDialog,
-    CProjectConfigDialog
-)
 from taara_ide.ui.editor.editor_manager import EditorManager
 from taara_ide.ui.controllers import BuildController
 
 from taara_ide.config import SettingsManager, AppConstants
 from taara_ide.services import ProjectService, BuildService, DebugService, LspService
+from taara_ide.extensions import ExtensionManager
 from taara_ide.utils import resource_path
-from taara_ide.core.compiler.c_project_config import CProjectConfigManager
 
 class MainWindow(QMainWindow):
     """
@@ -44,6 +39,7 @@ class MainWindow(QMainWindow):
         self._build_service = BuildService(self._project_service, self)
         self._debug_service = DebugService(self._project_service, self)
         self._lsp_service = LspService(self)
+        self._extension_manager = ExtensionManager(self._settings_manager, self)
         
         # Initialize UI managers
         self._actions = ActionManager(self)
@@ -109,7 +105,7 @@ class MainWindow(QMainWindow):
         self._connect_actions()
         self._connect_services() # Changed from _connect_signals to _connect_services
         self._restore_state()
-        
+
         # Connect build controller signals
         self._build_controller.build_output.connect(self._on_build_output)
         self._build_controller.build_finished.connect(self._on_build_finished)
@@ -117,9 +113,14 @@ class MainWindow(QMainWindow):
             lambda msg, timeout: self._status_manager.set_message(msg, timeout)
         )
 
-        # Ensure at least one Untitled editor is open if no tabs were restored
-        if self._tab_widget.count() == 0:
-            self._editor_manager.new_editor()
+        # Wire extension panel and activate enabled extensions
+        self._extensions_panel.set_extension_manager(self._extension_manager)
+        self._extension_manager.panel_widget_ready.connect(self._on_extension_panel_ready)
+        self._extension_manager.load_all(self)
+
+        # Finish deferred heavy widgets (ProjectView) after window is shown
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, self._finish_deferred)
     
     def _setup_window(self) -> None:
         """Configure main window properties"""
@@ -127,6 +128,19 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 768)
         self.setWindowIcon(QIcon(resource_path("icons/logoIcon.ico")))
     
+    def _on_extension_panel_ready(self, ext_id: str, widget) -> None:
+        """Add an extension's sidebar panel to the activity bar / sidebar stack."""
+        panel_id = f"ext_{ext_id}"
+        idx = self._sidebar_stack.addWidget(widget)
+        self._activity_bar.add_button(panel_id, "extensions", ext_id.replace("-", " ").title())
+        # Map the new panel_id to the new stack index via a direct connection
+        self._activity_bar.panel_changed.connect(
+            lambda pid, _idx=idx: (
+                self._sidebar_stack.setCurrentIndex(_idx)
+                if pid == panel_id else None
+            )
+        )
+
     def _on_activity_panel_changed(self, panel_id: str):
         """Handle activity bar panel change"""
         from taara_ide.ui.activity_bar import ActivityBar as _AB
@@ -175,10 +189,8 @@ class MainWindow(QMainWindow):
             self._on_symbols_updated
         )
         
-        if self._project_view:
-            self._project_view.file_requested.connect(self._editor_manager.open_editor)
-            self._project_view.index_requested.connect(self._on_index_requested)
-        
+        # project_view signals wired in _finish_deferred (it's built lazily)
+
         if self._function_list:
             self._function_list.symbol_selected.connect(self._editor_manager.open_file_at_line)
         
@@ -325,6 +337,7 @@ class MainWindow(QMainWindow):
     
     def _new_project(self) -> None:
         """Show create project dialog"""
+        from taara_ide.ui.dialogs import CreateProjectDialog
         dialog = CreateProjectDialog(self._project_service, self)
         dialog.project_created.connect(self._on_project_opened)
         dialog.exec()
@@ -371,6 +384,7 @@ class MainWindow(QMainWindow):
     
     def _show_find_dialog(self) -> None:
         """Show find dialog"""
+        from taara_ide.ui.dialogs import FindDialog
         dialog = FindDialog(self)
         dialog.find_requested.connect(self._do_find)
         dialog.replace_requested.connect(self._do_replace)
@@ -410,6 +424,7 @@ class MainWindow(QMainWindow):
         max_line = self._editor_manager.get_current_line_count()
         line, col = self._editor_manager.get_current_cursor_position()
         
+        from taara_ide.ui.dialogs import GoToLineDialog
         dialog = GoToLineDialog(self, current_line=line + 1, max_line=max_line)
         dialog.line_selected.connect(self._editor_manager.goto_line)
         dialog.exec()
@@ -503,6 +518,7 @@ class MainWindow(QMainWindow):
     
     def _show_ctags_dialog(self) -> None:
         """Show CTags path dialog"""
+        from taara_ide.ui.dialogs import CtagsPathDialog
         dialog = CtagsPathDialog(self)
         dialog.exec()
     
@@ -512,6 +528,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "No project is open.")
             return
         
+        from taara_ide.ui.dialogs import ProjectConfigDialog
         dialog = ProjectConfigDialog(self._project_service, self)
         dialog.exec()
     
@@ -539,6 +556,7 @@ class MainWindow(QMainWindow):
             return
         
         # Load or create .cproject config
+        from taara_ide.core.compiler.c_project_config import CProjectConfigManager
         c_config = CProjectConfigManager.load(project_path)
         if c_config is None:
             # Create default config
@@ -553,6 +571,7 @@ class MainWindow(QMainWindow):
             )
         
         # Show dialog
+        from taara_ide.ui.dialogs import CProjectConfigDialog
         dialog = CProjectConfigDialog(c_config, project_path, self)
         if dialog.exec():
             # Save configuration
@@ -572,6 +591,7 @@ class MainWindow(QMainWindow):
     
     def _show_install_framework(self) -> None:
         """Show framework installation dialog"""
+        from taara_ide.ui.dialogs import InstallFrameworkDialog
         dialog = InstallFrameworkDialog(self)
         dialog.exec()
     
@@ -631,25 +651,48 @@ class MainWindow(QMainWindow):
         
         last_project = self._settings_manager.get_last_project()
         if last_project and os.path.exists(last_project):
-            self._project_view.set_project_directory(last_project)
+            # project_view not yet built — set title now, directory set in _finish_deferred
             if self._search_panel:
                 self._search_panel.set_project_path(last_project)
-            
             folder_name = os.path.basename(last_project)
             self.setWindowTitle(f"{folder_name} - {AppConstants.APP_NAME} - {AppConstants.VERSION}")
-        
+
+        # Defer tab restoration until after the window is shown
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, self._restore_tabs)
+    
+    def _finish_deferred(self) -> None:
+        """Complete heavy widget init deferred from __init__ (runs after show)."""
+        self._layout.finish_deferred(self)
+        self._project_view = self._layout.project_view
+
+        # Wire signals that depend on project_view
+        self._project_view.file_requested.connect(self._editor_manager.open_editor)
+        self._project_view.index_requested.connect(self._on_index_requested)
+
+        # Re-apply last project to the now-real project view
+        last_project = self._settings_manager.get_last_project()
+        if last_project and os.path.exists(last_project):
+            self._project_view.set_project_directory(last_project)
+
+    def _restore_tabs(self) -> None:
+        """Restore previously open editor tabs (called deferred after show)."""
         open_tabs = self._settings_manager.get_open_tabs()
         active_index = self._settings_manager.get_active_tab_index()
-        
+
         tabs_restored = 0
         for file_path in open_tabs:
             if os.path.exists(file_path):
                 self._editor_manager.open_editor(file_path)
                 tabs_restored += 1
-        
+
         if tabs_restored > 0 and 0 <= active_index < self._tab_widget.count():
             self._tab_widget.setCurrentIndex(active_index)
-    
+
+        # Open a blank editor if nothing was restored
+        if self._tab_widget.count() == 0:
+            self._editor_manager.new_editor()
+
     def _save_state(self) -> None:
         """Save window state to settings"""
         self._settings_manager.set_window_geometry(self.saveGeometry())
@@ -696,6 +739,8 @@ class MainWindow(QMainWindow):
 
         if self._lsp_service.is_running():
             self._lsp_service.stop()
+
+        self._extension_manager.shutdown()
 
         self._save_state()
         
